@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): run the logd, linker-config and ART smoke test ("Next action:
-bring-up stage B3g", below) and paste its output.
+Bring-up track (separate thread): run the zygote preload test ("Next action:
+bring-up stage B4", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -703,29 +703,47 @@ Operationally tested on the M1:
   listing showed 28 files and 2 unresolved libraries, both of these.
 - `derive_classpath` succeeded earlier (B3d/B3e); the property stand-in is accepted.
 
-## Next action: bring-up stage B3g, apex info list, per-apex linker config, ART start
+## Results: bring-up stage B3g (`root-smoke-13vwu_iy`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: adds one small
-file, `apex/apex-info-list.xml`, to the extracted tree under
-`work/asahi/android-root-*/root` (written before the tree is mounted read-only),
-plus one small `work/asahi/root-smoke-*` directory (script, logs, traces). Private
-tmpfs mounts take every other write and vanish at exit. Loss: none. Reversal:
-delete that XML file and the printed directory. No sudo, no SELinux module, no
-binder, no partition, boot or flash change.
+- **ART runs.** `apex-info-list.xml` (43 apexes) fixed `linkerconfig`: it wrote a
+  config per apex (`/linkerconfig/com.android.art/ld.config.txt`, 62124 bytes, and
+  about 20 others), and `dalvikvm64 -help` worked with the generated config and no
+  library-path workaround (operationally tested).
+- **ART started with `/system/framework/arm64/boot.art`**, the derived
+  `BOOTCLASSPATH` and `-Xnorelocate -Xusejit:false`, and failed only on the
+  intended missing class: `java.lang.ClassNotFoundException: GbosNoSuchMain`
+  (operationally tested: boot image and boot classpath load).
+- `derive_classpath` succeeded and wrote `BOOTCLASSPATH`, `DEX2OATBOOTCLASSPATH`,
+  `SYSTEMSERVERCLASSPATH` and `STANDALONE_SYSTEMSERVER_JARS`. The property area
+  held 565 properties (3 skipped for length).
+- The "failed to find generated linker configuration" warnings in the log came
+  from programs that ran before `linkerconfig` in that script; B4 runs it first.
+- Not yet tested: zygote's own startup, any binder-dependent code, SELinux labels.
 
-What changes: `asahi/make-apex-info-list.py` writes the list from the apex
-manifests already extracted (module name, version, path). `linkerconfig` is then
-run with `logd` up and its per-apex output is checked. `dalvikvm64` is tried first
-with the generated config; if that fails, with an explicit library path that
-includes the statsd apex. Then ART is started with the system `boot.art`, the
-derived `BOOTCLASSPATH` and a main class that does not exist (the expected result
-is "class not found", which would show the runtime and boot image load).
+## Next action: bring-up stage B4, zygote preload without system_server
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: rewrites
+`apex/apex-info-list.xml` in the extracted tree (same content as B3g) and creates
+one `work/asahi/root-smoke-*` directory with the script, logs and an `strace` file
+of file and network calls (can reach tens of MB). The tree is read-only during the
+run; private tmpfs mounts take every other write and vanish at exit. Loss: none.
+Reversal: delete the printed directory (the XML file may stay). No sudo, no
+SELinux module, no binder, no partition, boot or flash change.
+
+What it does: runs `linkerconfig`, then `logd`, then `derive_classpath`, then the
+image's `app_process64 -Xzygote /system/bin --zygote --socket-name=zygote` with
+the zygote socket at `/dev/socket/zygote` passed in as `ANDROID_SOCKET_zygote`
+(as init does) and the classpath variables set, for up to 60 seconds. There is no
+`--start-system-server` and no binder, so this tests ART's zygote init, preload
+and socket listen only. It prints the process output, `logcat`, the processes
+in the namespace and the failed calls in the trace. Expect it may stop early; the
+stop reason is the result.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-logd-art.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B3g`. Paste only the command
+Its first line reads `=== BRING-UP THREAD, STAGE B4`. Paste only the command
 output (not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
