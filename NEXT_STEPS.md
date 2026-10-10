@@ -14,6 +14,21 @@ Next action: diagnose why the Android client rejected the scoped service
 lookup reply (second Parcel attempt below). Retain the completed native object/FD
 and Android empty-list results; do not rerun them. Do not rerun the Parcel probe
 until the lookup-reply layout is understood; the same command will stop the same way.
+Start with the read-only check below.
+
+## One command: read-only check of the image's service-manager interface
+
+No storage is modified; this only reads the extracted runtime from the failed runs.
+Upstream AOSP source is not reachable from the cloud session, so the lookup call
+and reply layout cannot be confirmed there. Run on the M1:
+
+```bash
+cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime && strings -a libbinder.so | grep -E 'checkService|getService|ServiceWithMetadata|IServiceManager|isDeclared|listServices' | sort -u | head -60
+```
+
+Say **get logs** with the output pasted. It shows which service-manager method
+names the image's libbinder contains, to decide whether code 4 and the Service
+union reply are right. It does not by itself establish the transaction codes.
 
 ## One command: Android returned object and outgoing FD Parcel
 
