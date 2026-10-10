@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5i", below) and paste its output.
+bring-up stage B5j", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -889,27 +889,37 @@ Operationally tested on the M1:
   reported `/dev/urandom` correctly after `pivot_root`, so the M1's result may
   depend on its kernel or mount setup. That is why the next step measures it.
 
-## Next action: bring-up stage B5i, print the path the kernel reports for /dev/urandom and other files after pivot_root
+## Results: bring-up stage B5i (`root-smoke-7c6pdsb6`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5h: the
+- **The `/dev/urandom` hypothesis is wrong.** After `pivot_root` the kernel on the M1
+  reports correct paths for `/dev/urandom`, `/dev/null`, `/dev/zero`, `/dev/tty`, an apex
+  jar and a font file; the device files are bind mounts of the host's `devtmpfs` entries
+  (`0:7 /urandom /dev/urandom`). `/` reports `/` (a directory), and `/proc/self/fd` reports
+  `/proc/<pid>/fd`.
+- The refusal is unchanged: zygote (pid 53) holds descriptor 60 pointing at `/`, and the
+  last traced `openat` that returned 60 is `/dev/urandom` (so that earlier descriptor was
+  probably closed and the number reused by a call the trace does not show).
+
+## Next action: bring-up stage B5j, dump the zygote descriptor table around 60, with fdinfo and stat
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5i: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: step S2b now enters the tree with `pivot_root` as zygote does and prints,
-for `/dev/urandom`, `/dev/null`, `/dev/zero`, `/dev/tty`, a jar, a font file, `/proc/self/fd`
-and `/`, the path the kernel reports for each open descriptor, plus the mount-table
-lines for `/dev`. The zygote part of the run is unchanged. The output decides the fix
-(for example, how the device files must be provided so they report their device paths).
+What changes: while zygote runs, the watcher also saves, for the process that holds a
+descriptor on `/`, the descriptors numbered 56 to 64 with their targets, the kernel's
+`fdinfo` for the offending one (open flags, mount id) and its `stat` (type, inode,
+device). The trace also records `fcntl`, `eventfd2`, `memfd_create`, `epoll_create1`
+and `open_by_handle_at`, which can hand out a descriptor number without an `openat`.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
 ```
 
 Its first line reads `=== BRING-UP THREAD, STAGE B5a`. Paste only the command output
-(not the prompt line) into this thread, "Remaining steps to boot Android". One run is
-enough; the second paste of the same step was not needed.
+(not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 

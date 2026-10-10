@@ -60,12 +60,17 @@ timeout 30 "$PY" "$ZYG" --probe-paths "$ROOT" 2>&1 | cut -c1-220
 
 say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
-if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority,dup,dup2,dup3,open_tree,fsopen,fspick' -o "$OUT/zygote.trace"); else TR=(); fi
+if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority,dup,dup2,dup3,open_tree,fsopen,fspick,fcntl,eventfd2,memfd_create,epoll_create1,open_by_handle_at' -o "$OUT/zygote.trace"); else TR=(); fi
 "${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
 ZPID=$!
 ( while kill -0 "$ZPID" 2>/dev/null; do
     find "$ROOT"/proc/[0-9]*/fd -maxdepth 1 -lname / -printf '%p\n' 2>/dev/null > "$OUT/rootfd.tmp"
-    [ -s "$OUT/rootfd.tmp" ] && cp "$OUT/rootfd.tmp" "$OUT/rootfd.last"
+    if [ -s "$OUT/rootfd.tmp" ]; then
+      cp "$OUT/rootfd.tmp" "$OUT/rootfd.last"
+      f=$(head -n 1 "$OUT/rootfd.tmp"); d="${f%/*}"
+      { echo "descriptor table around it:"; ls -l "$d" 2>/dev/null | grep -E ' (5[6-9]|6[0-4]) ->' | sed -E 's/.* ([0-9]+ -> )/\1/';
+        echo "fdinfo:"; cat "$d/../fdinfo/${f##*/}" 2>/dev/null; echo "stat:"; stat -L -c '%F inode=%i dev=%D mode=%a' "$f" 2>&1; } > "$OUT/rootfd.detail" 2>&1
+    fi
     sleep 0.2
   done ) &
 for i in $(seq 1 "$WAIT"); do kill -0 "$ZPID" 2>/dev/null || break; sleep 1; done
@@ -74,6 +79,7 @@ echo "--- zygote stdout/stderr (first 30):"; head -n 30 "$OUT/zygote.out" | cut 
 echo "--- last snapshot of descriptors that point at / (process, number, command):"
 if [ -s "$OUT/rootfd.last" ]; then
   while read -r f; do p="${f%/fd/*}"; echo "$f -> / ; $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-80)"; done < "$OUT/rootfd.last" | head -n 8
+  cat "$OUT/rootfd.detail" 2>/dev/null | cut -c1-200
 else echo "none seen (the process may have died between snapshots)"; fi
 echo "--- zygote socket:"; ls -l "$ROOT/dev/socket" 2>&1 | cut -c1-120
 echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf '%s %s\n' "${p##*/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
