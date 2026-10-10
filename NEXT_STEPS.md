@@ -2113,7 +2113,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3d complete; stage 3e is next
+## Graphics: stages 0, 1, 2 and 3a-3e complete; stage 3f is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2151,77 +2151,55 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3e, Android-built minigbm under Bionic
+### Next: Graphics stage 3f, minigbm and Honeykrisp in one Bionic process
 
-Stage 3d (below) proved the patched minigbm on glibc. This step builds the same
-patched source for Android with the stage 2c toolchain (Fedora clang, NDK
-sysroot, stage 2c libdrm; no download), then runs a small Android probe under
-the image's own linker that loads it, allocates a 256x256 ARGB8888 buffer on
-the display card node through `gbm_bo_create`, maps the dma-buf and checks a
-CPU write and read. There is no GPU work in this step; the Honeykrisp import of
-a minigbm buffer under Bionic is the step after it. minigbm's Makefile is
-driven with `CC` carrying the cross flags, `PKG_CONFIG=true` (so host
-pkg-config paths cannot leak in) and libdrm's include and library paths; this
-has not been tried, so a compile or link error is a possible first result and
-the report prints the end of the make log.
+Stage 3e (below) showed the Android-built patched minigbm allocating under the
+image's linker. This step uses both Android-built libraries together in one
+Android process, which is the core of what the allocator service and the
+mapper will do: minigbm allocates a 256x256 ARGB8888 linear buffer on the
+display card node, the CPU fills it, Honeykrisp (loaded directly as an ICD,
+no Android Vulkan loader) imports the dma-buf as a linear image, copies it out
+and clears it, then the CPU reads the result through the dma-buf mapping. The
+checks match stages 3b and 3d on glibc: `cpu_to_gpu` and `gpu_to_cpu`. The
+probe's logic was checked for syntax here only; its Android build and run are
+untested.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/minigbm-bionic-*` directory: a copy of the patched
-source, the Android build output, a run directory (image linker and libraries
-copied from the stage 2d result), the probe and `report.txt`. Earlier results
-are only read. One 256x256 dumb buffer is allocated on the display card node
-for the run only; no modeset, no DRM master. Delete the directory to reverse.
-
-First run (reported by the user, `work/asahi/minigbm-bionic-PDT2TvYD`): the
-patched source copied and libdrm was found, but every compile step failed with
-`-Wl,-z,max-page-size=16384: 'linker' input unused [-Werror,...]`. `common.mk`
-compiles with `-Werror`, and my `CC` carried a linker-only option. The script
-now adds `-Qunused-arguments`. Nothing was built.
-
-Second run (reported by the user, `work/asahi/minigbm-bionic-suJA3aqq`): the
-checkout-root build files from the first stage 3d run were removed with `git
-clean` (only `*.o`, `*.o.depends`, `*.pic.d`, `*.pic.o`, `*.pie.d`, `*.pie.o`,
-`gbm.pc` and `.dont_delete_on_clean`; `artifacts/` was left alone). With
-`-Qunused-arguments` the compiler now reads the sources, and stops at
-`drv.c: 'cutils/log.h' file not found` and `drv_helpers.c: 'cutils/properties.h'
-file not found`: minigbm's Android code paths use libcutils headers, which are
-not in the NDK sysroot. `asahi/android-shims/` adds two small original headers
-(`__android_log_print` for logging, `__system_property_get` for properties; see
-its README) and the script now passes `-I` for them. It also prints the
-Android-specific includes and calls found in the sources, and runs `make -k`
-serially so one run lists every remaining error instead of the first. More
-missing headers are possible; the printed list is what I will work from.
-
-Third run (reported by the user, `work/asahi/minigbm-bionic-E94eKqrW`): the
-build now works. `make` exit 0 and `libminigbm.so.1.0.0` is an ELF64 AArch64
-shared object with all four `PT_LOAD` segments aligned 0x4000 (16 KiB),
-`DT_NEEDED` `libdrm.so`, `libdl.so`, `libc.so`, soname `libgbm.so.1`, and the
-`gbm_create_device`, `gbm_bo_create` and `gbm_bo_get_fd` symbols exported. The
-only Android headers the core library needed were the two shimmed ones. The
-probe also built. The run step then failed with `linker: error: expected
-absolute path: "./probe-minigbm-bionic"`: the image's linker wants absolute
-paths (the stage 2d runner already used them). The script now does too.
-
-Fourth run (reported by the user, `work/asahi/minigbm-bionic-fO4Ujc7x`): the
-image linker started and the probe ran (`page_size=16384`; the missing
-`/linkerconfig/ld.config.txt` warning is expected outside Android), but
-`dlopen` of `libminigbm.so` failed: `cannot locate symbol
-"__android_log_vprint"`. `drv.c` logs through it and my build did not link
-`liblog`, so the library's `DT_NEEDED` lacked `liblog.so`. The script now links
-`-llog` (the stage 2d library set already contains the image's `liblog.so`).
-
-Not built yet, and needed for the allocator service and mapper: minigbm's
-`cros_gralloc/` code also includes `cutils/native_handle.h`,
-`hardware/gralloc.h`, `cutils/properties.h` and `sync/sync.h`. Those are the next
-set of headers to supply.
+Creates one new `work/asahi/gfx-bionic-*` directory: a copy of the stage 3e
+linker and library set, the probe and `report.txt`. Earlier results are only
+read. One 256x256 dumb buffer is allocated on the display card node for the
+run only; no modeset, no DRM master. Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/run-minigbm-bionic.sh
+bash asahi/run-gfx-bionic.sh
 ```
 
 Send the printed `report.txt`.
+
+### Result: Graphics stage 3e, Android-built minigbm under Bionic (passed)
+
+Operationally tested, reported by the user from
+`work/asahi/minigbm-bionic-Gg543na3` (earlier runs, each fixing one problem of
+mine: `-Wl` option rejected by `-Werror` compiles, missing `cutils` headers,
+a relative linker path, and no `liblog` in the link):
+
+- Build: the patched minigbm (stage 3d patch) cross-compiled with Fedora clang,
+  the NDK r28c sysroot, stage 2c libdrm and two original header shims
+  (`asahi/android-shims/`) for `cutils/log.h` and `cutils/properties.h`.
+  `libminigbm.so.1.0.0` is ELF64 AArch64, all four `PT_LOAD` segments 16 KiB
+  aligned, `DT_NEEDED` `libdrm.so`, `liblog.so`, `libdl.so`, `libc.so`, soname
+  `libgbm.so.1`, exporting `gbm_create_device`, `gbm_bo_create`, `gbm_bo_get_fd`.
+- Run, as the ordinary user under the image's `linker64` with
+  `page_size=16384`: `dlopen` passed, `gbm_create_device` on the `apple` card
+  node passed (`card2` could not be opened, errno 13, as before),
+  `gbm_bo_create` gave a dma-buf of 262144 bytes, stride 1024, and a CPU write
+  then read through its mapping matched 65536/65536 pixels. The
+  `/linkerconfig/ld.config.txt` warning is expected outside Android.
+- Not covered: the GPU side under Bionic (stage 3f), `cros_gralloc/`, the
+  allocator service and mapper, other processes, scanout. `cros_gralloc/` also
+  needs `cutils/native_handle.h`, `hardware/gralloc.h` and `sync/sync.h`.
 
 ### Result: Graphics stage 3d, patched minigbm on glibc (passed)
 
