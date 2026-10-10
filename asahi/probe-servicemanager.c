@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
         if (setpgid(0, 0)) fail("own process group");
         if (chroot(argv[3]) || chdir("/")) fail("enter private root");
         execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", trace,
-              "/usr/bin/runcon", "runcon", "-t", "gbos_binder_probe_t", argv[0], "--sm-run", argv[2], (char *)NULL);
+              "/usr/bin/runcon", "-t", "gbos_binder_probe_t", argv[0], "--sm-run", argv[2], (char *)NULL);
         fail("execute traced servicemanager");
     }
     int status = 0, exited = 0;

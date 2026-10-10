@@ -12,7 +12,7 @@ The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
 Next action: rerun the one command under "Run now: real servicemanager first
-run (stage 5a)" (the `/etc/selinux/config` fixture is added), then say **get logs**.
+run (stage 5a)" (a launcher argument bug is fixed), then say **get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -234,6 +234,17 @@ before the message. So the selinuxfs bind is fine; Fedora's libselinux evidently
 also wants that config file to exist (my reading of the trace, not of its source).
 Change: the extraction now writes a copy of the host `/etc/selinux/config` text
 into the private root. Nothing else changed.
+
+### Third 5a run: `runcon` ran, but my launcher passed it a wrong argument
+
+Reported by the user (`work/asahi/real-servicemanager-dtj_y4uc`): with
+`/etc/selinux/config` present (`faccessat` now returns 0 in the trace), `runcon`
+no longer refused the kernel but printed `failed to create security context:
+'runcon': Invalid argument` and exited 125. Cause, in my launcher and not in the
+image or SELinux: I passed `"runcon"` as an extra argument after the program path
+in the `strace` command line, so `runcon` took the word `runcon` as a context
+string to parse. Fixed by removing the extra word. Cleanup codes 0, no AVC
+denials; **servicemanager still has not started**.
 
 ## Run now: real servicemanager first run (stage 5a)
 
