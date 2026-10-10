@@ -12,7 +12,7 @@ SRC=$(newest 'aosp-gralloc-src-*' system_libbase/include)
 EXTRA=$(newest 'aosp-gralloc-extra-*' system_libhidl/transport)
 for v in HB SRC EXTRA; do [[ -n ${!v} ]] || { echo "Missing earlier result for $v (stages 3i, 3l and 3m are required)." >&2; exit 1; }; done
 echo 'THIS STEP MODIFIES STORAGE'
-echo "Creates one new $W/aosp-gralloc-more-* directory: two small sparse shallow clones from android.googlesource.com,"
+echo "Creates one new $W/aosp-gralloc-more-* directory: three small sparse shallow clones from android.googlesource.com,"
 echo 'generated HIDL headers and report.txt. Earlier results are only read. Delete the new directory to reverse.'
 OUT=$(mktemp -d "$W/aosp-gralloc-more-XXXXXXXX")
 echo "Results: $OUT"
@@ -29,14 +29,15 @@ fetch() {
     [[ $# -gt 0 ]] && git -C "$dir" sparse-checkout set "$@" 2>/dev/null
     git -C "$dir" log -1 --format='COMMIT %H %cI'
 }
-fetch system/libfmq include
+fetch system/libfmq include base
+fetch hardware/libhardware include include_all
 fetch frameworks/native libs/nativebase
 echo '== Generate android.hidl.manager@1.0 headers'
 HI=$SRC/hardware_interfaces; LH=$EXTRA/system_libhidl
 "$HB/hidl-gen" -o "$OUT/generated" -L c++-headers -r android.hidl:"$LH/transport" -r android.hardware:"$HI" android.hidl.manager@1.0 2>&1 | head -10
 find "$OUT/generated" -type f | sed "s|$OUT/||" | sort
 echo '== Where the files named missing live'
-for h in nativebase/nativebase.h fmq/MQDescriptorBase.h android/hidl/manager/1.0/IServiceNotification.h; do
+for h in hardware/gralloc.h nativebase/nativebase.h fmq/MQDescriptorBase.h android/hidl/manager/1.0/IServiceNotification.h; do
     echo "$h: $(find "$OUT" -path "*/$h" -not -path '*/.git/*' 2>/dev/null | head -2 | sed "s|$OUT/||" | tr '\n' ' ')"
 done
 echo; echo "Send $OUT/report.txt"

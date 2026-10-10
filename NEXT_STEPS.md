@@ -2509,7 +2509,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3m complete; stage 3n-b (last header sources) is next
+## Graphics: stages 0, 1, 2 and 3a-3m complete; stage 3n-c (two more header locations) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2547,26 +2547,29 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3n-b, fetch the last header sources and recheck
+### Next: Graphics stage 3n-c, two header locations that were not fetched
 
-Stage 3n (reported) got one layer further with the generated HIDL headers on
-the path. Still missing: `nativebase/nativebase.h` (6 files, in
-`frameworks/native` `libs/nativebase`), `fmq/MQDescriptorBase.h` (3 files,
-`system/libfmq`) and `android/hidl/manager/1.0/IServiceNotification.h` (3 files;
-HIDL-generated, `hidl-gen` can produce it from `system/libhidl`).
-`hardware/gralloc.h` is also still reported missing although the file exists in
-the fetched `hardware/libhardware` tree, so the recheck now prints why (which
-files need it and whether its directory is on the path).
+Stage 3n-b (reported) fixed `nativebase/nativebase.h` and
+`android/hidl/manager/1.0/IServiceNotification.h`; `cros_gralloc_buffer.cc`
+now passes the syntax check. Two things remain:
 
-This step does two small sparse clones, generates the
-`android.hidl.manager@1.0` headers with the stage 3m `hidl-gen`, then reruns
-the syntax-only check. I have not run either updated script here.
+- `hardware/gralloc.h` in the fetched tree is a symlink to
+  `../../include_all/hardware/gralloc.h`, and `include_all` was not in the
+  sparse checkout, so the link dangles.
+- `fmq/MQDescriptorBase.h` is not in `system/libfmq`'s `include` directory; it
+  is most likely under `base/`.
+
+The prepare script now fetches `libfmq` `include` and `base` plus
+`hardware/libhardware` `include` and `include_all`, and prints where each
+missing file lives. I have not run it here.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/aosp-gralloc-more-*` directory (the clones and
-generated headers) and one `work/asahi/gralloc-check-*` directory. Nothing is
-installed. Delete the directories to reverse.
+Creates one more `work/asahi/aosp-gralloc-more-*` directory (three small
+sparse clones, regenerated HIDL manager headers) and one
+`work/asahi/gralloc-check-*` directory. Nothing is installed. Delete the new
+directories to reverse (the earlier `more` directory is still used and can be
+removed after).
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
@@ -2574,7 +2577,7 @@ bash asahi/prepare-gralloc-headers.sh
 bash asahi/check-gralloc-service-build.sh
 ```
 
-Send both printed reports (the two `report.txt` files).
+Send both printed reports.
 
 ### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation
 
