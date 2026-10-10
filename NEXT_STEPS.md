@@ -41,10 +41,13 @@ order (recalled, not verified against this image) code 4 would be checkService2,
 which matches the observed request, so the likelier fault is the reply layout:
 the `Service` union tag/field order and whether the nested parcelable is sized.
 
-No storage is modified. On the M1:
+No storage is modified. The first attempt listed the symbols (reported:
+`Service::readFromParcel` at 0x6bec0 and `ServiceWithMetadata::readFromParcel`
+at 0x6c800 in `lib64/libbinder.so`) but the name-based disassembly printed
+nothing, so use addresses. On the M1:
 
 ```bash
-cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && nm -D --defined-only libbinder.so | grep -E 'Service.*readFromParcel|ServiceWithMetadata' ; objdump -d --no-show-raw-insn libbinder.so | awk '/^[0-9a-f]+ <_ZN7android2os7Service14readFromParcelEPKNS_6ParcelE>:/{p=1} p{print} /^$/{if(p)exit}' | head -120
+cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && objdump -d --no-show-raw-insn --start-address=0x6bec0 --stop-address=0x6c200 libbinder.so 2>&1 | head -260
 ```
 
 Say **get logs** with the output. If `objdump` is missing, say so; do not
