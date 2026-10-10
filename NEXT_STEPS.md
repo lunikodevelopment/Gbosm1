@@ -8,9 +8,72 @@ Current status: Bionic Toybox execution and native private Binder echo both pass
 on Fedora Asahi ARM64/16 KiB. The dedicated Binder server domain ran with SELinux
 enforcing; its temporary module was removed and the new executable label restored.
 Qualcomm graphics adaptation remains required.
-Next development action: select a focused Android libbinder integration probe
-using the already extracted Bionic runtime and a separate private Binder context.
-No new user command is required yet; do not repeat the completed echo probe.
+Next action: run the recovery image's Android `service list` command against a
+minimal native empty-list service-manager stub in a separate private Binder
+context. This revision has not yet run on the target.
+
+## One command: Android libbinder list request
+
+**THIS STEP MODIFIES STORAGE**
+
+Git updates tracked source in `~/Gbosm1`, preserving history and stopping on
+conflicts. The runner creates a new `work/asahi/libbinder-probe-*` directory
+containing copied Android runtime files, new library candidates, a native stub,
+policy, report and logs. It reuses the completed Bionic runtime, extracts only
+needed files from the retained recovery image and validates ARM64/16 KiB ELF
+alignment. Existing results and the source image are retained. Copies are
+bounded to 64 MiB each and 64 library entries. If an additional Bionic APEX
+library is needed, temporary package/payload copies are bounded to 512 MiB each
+and removed automatically. Allow several GiB of capacity for the new result.
+
+The previously demonstrated dedicated server policy is installed temporarily;
+only the new native stub executable is specially labeled. Fedora's active
+policy/store under `/var/lib/selinux` is affected until cleanup. Cleanup restores
+the executable label and removes the new module. The runner refuses an existing
+`gbos_binder_probe` module. Failed/interrupted cleanup may leave that module or
+label in place; reversal instructions remain in the completed policy section
+below. Generated files can be reversed by deleting only the new printed result
+directory after label/module cleanup. Source history remains recoverable in Git.
+
+Inside a private user/mount namespace, the native launcher mounts binderfs and
+a small temporary tmpfs over `/dev`. It exposes only its new Binder device at
+that namespace's `/dev/binder`, plus the original null device at `/dev/null`.
+The host's `/dev` mount and device nodes are retained. All probe mounts disappear
+on namespace exit. This alias lets the image's unmodified libbinder client use
+its expected Binder path without installing Android files on the host.
+
+Run as `gbos_user`; sudo is used only for temporary policy/label operations and
+reading AVC logs, as in the completed echo milestone:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --android-service
+```
+
+The Android binary is `/system/bin/service` from the image, invoked through the
+copied Android linker with local Bionic/system libraries and only the `list`
+argument. The native server runs in `gbos_binder_probe_t`; the client remains in
+its existing domain. Enforcement stays enabled. No Android init, full Android
+servicemanager, service registration, framework, HAL or graphics service starts.
+
+The stub supports only ping/interface metadata and one empty-list reply. It
+verifies the UTF-16 `android.os.IServiceManager` token, transaction code 6 and
+priority flags 15 from the pinned AOSP reference. Unknown wire layouts stop with
+the received code/size in the report; the Android 17 image is not assumed to
+match every Android 16 interface detail. Success requires the Android client to
+print `Found 0 services:`, the stub to verify and reply, and both processes to
+exit 0 (`LIBBINDER_LIST=PASS`). This establishes only the observed client/stub
+parcel request/reply path. It is not a real service directory or evidence that
+Android servicemanager, object/FD transfer, VINTF or HALs work.
+
+Native launcher/stub and extraction code are original project source. Protocol
+references inspected (AOSP Apache-2.0 sources, tag `android-16.0.0_r1`):
+
+- [IServiceManager.aidl](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-16.0.0_r1/libs/binder/aidl/android/os/IServiceManager.aidl)
+- [service.cpp](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-16.0.0_r1/cmds/service/service.cpp)
+
+After completion, say **get logs**. Keep the HTTP server available at
+`http://192.168.178.47:8000/work/asahi/`; I will locate and retrieve the new
+`libbinder-probe-*` report and cleanup status directly.
 
 ## Completed Binder echo and cleanup
 
@@ -240,8 +303,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Prepare Android libbinder integration against a separate private Binder
-   context, reusing the completed Bionic and native Binder milestones.
+1. Run the focused Android service-list client/stub probe and inspect its
+   parcel and cleanup results before selecting further libbinder integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
