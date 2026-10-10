@@ -66,36 +66,10 @@ The report contains paths and device details; review it before sharing publicly.
 
 ## Run in Fedora Asahi
 
-Transfer the supplied source archive to your Fedora home directory first. No
-full AOSP build, recovery-image download, or VM installer is needed.
-
-**THIS STEP MODIFIES STORAGE**
-
-Extracting the archive creates a source directory under your home filesystem.
-Building creates/replaces `work/asahi/vulkan-probe` there. These ordinary files
-can be deleted to reverse the step; no EFI, boot or Apple partitions are changed.
-Use a new directory name to avoid overwriting an existing checkout.
-
-```bash
-mkdir ~/gbos-asahi-poc
-tar -xzf ~/gbos-asahi-poc.tar.gz -C ~/gbos-asahi-poc
-cd ~/gbos-asahi-poc
-python3 asahi/baseline.py
-bash asahi/build-probe.sh
-./work/asahi/vulkan-probe
-./work/asahi/vulkan-probe --caps
-```
-
-Run as `gbos_user` without sudo. Copy the JSON, compiler output and both probe
-outputs back into the conversation. If the build script reports missing
-prerequisites, stop and return that output; it does not install packages.
-Likely Fedora package names: gcc, pkgconf-pkg-config, vulkan-loader-devel.
-Vulkan runtime/driver availability on the Minimal install is unverified.
-
-Acceptance: reported runtime page size 16384; Apple hardware device selected;
-successful submit/wait/map/invalidate; `VM_VULKAN readback=PASS`; exit status 0.
-An error or exit 20 is a diagnostic result, not milestone success. Do not work
-around permissions by running the probe as root or disabling SELinux.
+All current and future execution instructions are in
+**[NEXT_STEPS.md](../NEXT_STEPS.md)**. It records the successful Fedora baseline,
+missing compiler, package installation and build/run/log collection commands.
+The earlier archive transfer instructions are superseded by the GitHub checkout.
 
 ## 16 KiB and next steps
 
@@ -118,16 +92,10 @@ configuration and vendor paths should follow those results, not speculative HALs
 Native Asahi Vulkan background:
 https://asahilinux.org/2024/06/vk13-on-the-m1-in-1-month/
 
-## Validation in this workspace
+## Validation status
 
-The collector has fixture tests for disabled versus unknown configuration,
-gzip/fallback selection and DRM driver symlinks:
-
-```bash
-python3 -m unittest discover -s tests -p 'test_asahi_*.py' -v
-bash -n asahi/build-probe.sh
-```
-
-Linux compilation, native GPU execution and the Android build regression check
-remain pending: this local session is macOS without a C compiler/Android NDK or
-an execution connection to Fedora. No image build or boot attempt has been made.
+Four collector fixture tests, shell syntax and whitespace checks passed locally.
+The target baseline was received; its observations are recorded in the central
+runbook. Linux compilation, native GPU execution and Android build regression
+validation remain pending. The target build stopped because GCC is missing.
+No image build or boot attempt has been made.
