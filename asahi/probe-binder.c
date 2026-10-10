@@ -18,6 +18,12 @@
 
 #define MAP_BYTES (1024 * 1024)
 static const char payload[] = "Asahi Binder 16KiB echo";
+static void timeout_exit(int signum) {
+    (void)signum;
+    static const char message[] = "PROBE_TIMEOUT: launcher/server alarm expired\n";
+    (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+    _exit(124);
+}
 struct connection { int fd; void *map; };
 static void fail(const char *where) { perror(where); exit(1); }
 static void require(int ok, const char *why) {
@@ -108,6 +114,7 @@ static void server(const char *path, int ready_fd) {
     puts("Dedicated-domain server verified request and submitted reply.");
 }
 int main(int argc, char **argv) {
+    if (signal(SIGALRM, timeout_exit) == SIG_ERR) fail("install alarm handler");
     if (argc == 4 && strcmp(argv[1], "--server") == 0) {
         setvbuf(stdout, NULL, _IONBF, 0);
         char *end;
