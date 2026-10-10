@@ -5,6 +5,56 @@
 #define main native_echo_main
 #include "probe-binder.c"
 #undef main
+#include <sys/stat.h>
+
+/* Immutable, single-property fixture for Bionic's ContextsPreSplit reader.
+ * Layout reference: platform/bionic revision
+ * 731631f300090436d7f5df80d50b6275c8c60a93,
+ * libc/system_properties/{prop_area.cpp,
+ * include/system_properties/prop_area.h,include/system_properties/prop_info.h}.
+ * The wire format is versioned; it is not a text build.prop file. No Android
+ * property service or property API interposition is used by this probe.
+ */
+static void stub_ready_property(void) {
+    enum { AREA_BYTES = 128 * 1024, HEADER_BYTES = 128, NODE_BYTES = 20,
+           VALUE_BYTES = 92, ROOT = 0, SERVICE = NODE_BYTES + VALUE_BYTES,
+           READY = SERVICE + 36, INFO = READY + 28, USED = INFO + 120 };
+    unsigned char *area = calloc(1, AREA_BYTES);
+    if (!area) fail("allocate readiness property area");
+#define WORD(offset, value) do { uint32_t word = (value); memcpy(area + (offset), &word, 4); } while (0)
+    WORD(0, USED); WORD(4, 1);
+    WORD(8, 0x504f5250); WORD(12, 0xfc6ed0ab);
+    /* Trie offsets are relative to data_, after the 128-byte header. The
+     * root's 92-byte dirty-value backup remains zero; no writer is started. */
+    WORD(HEADER_BYTES + ROOT + 16, SERVICE);
+    WORD(HEADER_BYTES + SERVICE, 14);
+    WORD(HEADER_BYTES + SERVICE + 16, READY);
+    memcpy(area + HEADER_BYTES + SERVICE + NODE_BYTES, "servicemanager", 15);
+    WORD(HEADER_BYTES + READY, 5);
+    WORD(HEADER_BYTES + READY + 4, INFO);
+    memcpy(area + HEADER_BYTES + READY + NODE_BYTES, "ready", 6);
+    WORD(HEADER_BYTES + INFO, 4u << 24); /* length=4; dirty bit clear */
+    memcpy(area + HEADER_BYTES + INFO + 4, "true", 5);
+    memcpy(area + HEADER_BYTES + INFO + 4 + VALUE_BYTES,
+           "servicemanager.ready", sizeof("servicemanager.ready"));
+#undef WORD
+    int fd = open("/dev/__properties__", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) fail("create private readiness property area");
+    struct stat info;
+    if (fstat(fd, &info)) fail("stat readiness property area");
+    require(info.st_uid == 0 && info.st_gid == 0 && S_ISREG(info.st_mode),
+            "property area must be owned by namespace root");
+    size_t done = 0;
+    while (done < AREA_BYTES) {
+        ssize_t n = write(fd, area + done, AREA_BYTES - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) fail("write readiness property area");
+        done += (size_t)n;
+    }
+    free(area);
+    if (fchmod(fd, 0444) || close(fd)) fail("seal readiness property area");
+    puts("STUB_READY_PROPERTY=CREATED: private servicemanager.ready=true; Bionic consumption remains to be observed.");
+}
 
 static struct binder_transaction_data receive_request(struct connection c) {
     unsigned char buf[4096];
@@ -150,6 +200,7 @@ int main(int argc, char **argv) {
     }
     close(ready[1]); char token;
     require(read(ready[0], &token, 1) == 1 && token == 'R', "stub stopped before readiness"); close(ready[0]);
+    stub_ready_property();
     pid_t client_pid = fork(); if (client_pid < 0) fail("fork Android client");
     if (client_pid == 0) {
         char library_env[sizeof(libraries) + 32];
