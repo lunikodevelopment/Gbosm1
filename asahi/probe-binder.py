@@ -27,7 +27,10 @@ def main():
                         help='run the image service list client against a native empty-list stub')
     mode.add_argument('--object-fd', action='store_true',
                       help='verify native Binder object calls and a sealed memfd round trip')
+    mode.add_argument('--android-parcel', action='store_true',
+                      help='run image service call against a controlled object/FD Parcel endpoint')
     args = parser.parse_args()
+    android_mode = args.android_service or args.android_parcel
     if not args.temporary_policy:
         parser.error('this revision requires --temporary-policy; see NEXT_STEPS.md for scope and reversal')
     if os.geteuid() == 0:
@@ -35,7 +38,7 @@ def main():
     if platform.system() != 'Linux' or platform.machine() not in ('aarch64', 'arm64') or os.sysconf('SC_PAGE_SIZE') != 16384:
         sys.exit('Requires the Fedora Asahi ARM64/16 KiB target.')
     required = ['cc', 'unshare', 'runcon', 'sudo', 'semodule', 'chcon', 'ldd']
-    if args.android_service:
+    if android_mode:
         required.extend(['dump.erofs', 'strace'])
     for tool in required:
         if not shutil.which(tool):
@@ -47,18 +50,20 @@ def main():
         sys.exit('Requires the previously observed unconfined_r/unconfined_t user context.')
     parent = Path('work/asahi')
     print('THIS STEP MODIFIES STORAGE', flush=True)
-    print('Creates a new work/asahi/*binder*-probe-* directory containing a native probe and logs.', flush=True)
+    print('Creates a new work/asahi probe result directory containing a native probe and logs.', flush=True)
     print('Temporarily mounts binderfs only in new user/mount namespaces; namespace exit removes the mount.', flush=True)
     print('Temporarily installs gbos_binder_probe SELinux module and labels only the new probe executable.', flush=True)
     print('Cleanup restores the original executable context and removes only this new policy module.', flush=True)
     print('If interrupted during cleanup: sudo semodule -r gbos_binder_probe; see NEXT_STEPS.md.', flush=True)
     print('Existing files are retained. Delete the new result directory to reverse generated files.', flush=True)
     parent.mkdir(parents=True, exist_ok=True)
-    prefix = 'libbinder-probe-' if args.android_service else 'binder-transfer-probe-' if args.object_fd else 'binder-probe-'
+    prefix = ('android-parcel-probe-' if args.android_parcel else 'libbinder-probe-' if args.android_service
+              else 'binder-transfer-probe-' if args.object_fd else 'binder-probe-')
     out = Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
     mountpoint = out / 'binderfs'
     mountpoint.mkdir()
-    source_name = 'probe-libbinder.c' if args.android_service else 'probe-binder-transfer.c' if args.object_fd else 'probe-binder.c'
+    source_name = ('probe-android-parcel.c' if args.android_parcel else 'probe-libbinder.c' if args.android_service
+                   else 'probe-binder-transfer.c' if args.object_fd else 'probe-binder.c')
     source = Path(__file__).with_name(source_name).resolve()
     binary = out / 'binder-echo'
     lock = (parent / 'binder-policy.lock').open('a')
@@ -173,7 +178,7 @@ def main():
         if args.object_fd:
             result['limitations'] = ['Native Linux Binder UAPI object/FD prerequisite only; no Android executable is run in this mode.',
                                     'One sealed memfd and one returned Binder object; DMA-BUF, fences, death notifications, full object lifetimes, servicemanager and HALs remain untested.']
-        if args.android_service:
+        if android_mode:
             cleanup_previous_clients()
             import importlib.util
             spec = importlib.util.spec_from_file_location('service_extract', Path(__file__).with_name('prepare-service.py'))
@@ -190,6 +195,13 @@ def main():
             result['limitations'] = ['Android service list against a native empty-list stub only; no Android servicemanager or services are started.',
                                     'servicemanager.ready is a private immutable fixture for the ready stub; Android init/property service and split property contexts are not demonstrated.',
                                     'Object/FD transfer, complete namespaces, VINTF, HALs and graphics remain untested.']
+            if args.android_parcel:
+                result['android_call'] = {'service': 'gbos.parcel', 'code': 5658,
+                                          'arguments': ['i32', '5658', 'fd', '/dev/gbos-parcel-input'],
+                                          'receipt_words': ['47504231', '00004000']}
+                result['limitations'] = ['Image service CLI decodes/calls one returned Binder object and serializes an outgoing FD; native endpoint verifies the file.',
+                                        'Android FD receipt/readback, Android local Binder object export, complete lifetimes, DMA-BUF/fences and real servicemanager/HALs remain untested.',
+                                        'Readiness property, service lookup metadata and interface are private fixtures for this endpoint, not Android boot or service registration.']
             log('Temporary /dev overlay and Binder alias are private to the child mount namespace.')
         result['build'] = run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', str(source), '-o', str(binary)], 'build', 60)
         if result['build']['returncode']:
@@ -248,7 +260,7 @@ def main():
         rules += [f'(allow gbos_binder_probe_t {t} (lnk_file (read getattr)))' for t in sorted(symlink_types)]
         rules += [f'(allow gbos_binder_probe_t {t} (file (write append getattr)))' for t in sorted(log_types)]
         memfd_type = None
-        if args.object_fd:
+        if args.object_fd or args.android_parcel:
             # Inspect an anonymous file created in the same client domain. No
             # disk file is created and no transferred-file execute/write rule
             # is added to the dedicated server domain.
@@ -269,7 +281,7 @@ def main():
         result['policy'] = {'device_type': device_type, 'library_types': sorted(library_types),
                             'directory_types': sorted(directory_types), 'log_types': sorted(log_types),
                             'symlink_types': sorted(symlink_types)}
-        if args.object_fd:
+        if args.object_fd or args.android_parcel:
             result['policy']['memfd_type'] = memfd_type
             result['policy']['object_transfer'] = 'gbos_binder_probe_t -> unconfined_t only'
         modules = run(['sudo', 'semodule', '-l'], 'existing-modules', 60)
@@ -289,11 +301,38 @@ def main():
         # util-linux isolates mount propagation; root privileges apply only inside the new user namespace.
         command = ['unshare', '--user', '--map-root-user', '--mount', '--pid', '--mount-proc', '--propagation', 'private',
                    '--fork', '--kill-child', str(binary), str(mountpoint)]
-        if args.android_service:
+        if android_mode:
             command.append(result['android_runtime']['runtime'])
-        result['execution'] = run(command, 'service-list' if args.android_service else 'transfer' if args.object_fd else 'echo', 40)
-        marker = 'LIBBINDER_LIST=PASS' if args.android_service else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS'
+        result['execution'] = run(command, 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
+                                  else 'transfer' if args.object_fd else 'echo', 40)
+        marker = ('ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
+                  else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS')
         output = result['execution']['stdout']
+        if args.android_parcel:
+            actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
+            if not actual or type_of(actual[1]) != memfd_type:
+                raise RuntimeError('Android Parcel memfd type differs from the scoped policy type')
+            client_path = Path(result['android_runtime']['runtime']) / 'parcel-client.stdout'
+            if client_path.stat().st_size > 65536:
+                raise RuntimeError('Android Parcel client output exceeds 64 KiB limit')
+            client_output = client_path.read_text(errors='replace')
+            result['android_client_stdout'] = client_output
+            log('ANDROID CLIENT OUTPUT:\n' + client_output)
+            # The CLI ignores transact's status; require its actual reply dump
+            # to contain the endpoint's receipt, not just a successful CLI exit.
+            reply_dump = re.search(r'Result:\s*Parcel\(([^)]*)\)', client_output, re.I)
+            # HexDump may render 32-bit words or raw byte groups. Both forms
+            # below encode the same two little-endian receipt integers.
+            receipt = bool(reply_dump and re.search(
+                r'\b47504231\s+00004000\b|\b31\s*42\s*50\s*47\s+00\s*40\s*00\s*00\b',
+                reply_dump[1], re.I))
+            result['android_receipt_verified'] = receipt
+            required_markers = ('STUB_READY_PROPERTY=CREATED', 'PARCEL_INPUT=READY', 'ANDROID_OBJECT_READ=PASS',
+                                'ANDROID_FD_WRITE=PASS', 'PARCEL_ENDPOINT_REPLY=PASS', 'ANDROID_PARCEL=PASS')
+            missing = [item for item in required_markers if item not in output]
+            result['missing_markers'] = missing
+            if missing or not receipt:
+                raise RuntimeError('Android Parcel markers or printed receipt missing: ' + ', '.join(missing))
         if args.object_fd:
             actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
             if not actual or type_of(actual[1]) != memfd_type:
@@ -319,7 +358,7 @@ def main():
         result['error'] = f'{type(error).__name__}: {error}'
         log('STOPPED: ' + result['error'])
     finally:
-        if args.android_service:
+        if android_mode:
             try:
                 trace = out / 'android-runtime' / 'client.trace'
                 if trace.is_file():
@@ -334,6 +373,18 @@ def main():
                 result['trace_error'] = str(error)
                 result['exit_status'] = 1
                 log('Trace collection failed; continuing policy cleanup: ' + str(error))
+            if args.android_parcel:
+                try:
+                    client_path = out / 'android-runtime' / 'parcel-client.stdout'
+                    if client_path.is_file() and 'android_client_stdout' not in result:
+                        if client_path.stat().st_size > 65536:
+                            raise RuntimeError('Android Parcel client output exceeds 64 KiB limit')
+                        result['android_client_stdout'] = client_path.read_text(errors='replace')
+                        log('ANDROID CLIENT OUTPUT:\n' + result['android_client_stdout'])
+                except BaseException as error:
+                    result['client_output_error'] = str(error)
+                    result['exit_status'] = 1
+                    log('Client output collection failed; continuing policy cleanup: ' + str(error))
         # Attempt cleanup even when policy installation was interrupted or only partly completed.
         if install_attempted:
             try:
