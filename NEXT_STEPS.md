@@ -2509,7 +2509,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3m complete; stage 3n-d (last header directory) is next
+## Graphics: stages 0, 1, 2 and 3a-3n complete; stage 3o (build the allocator service and mapper) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2547,27 +2547,34 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3n-d, the libfmq `base` directory
+### Next: Graphics stage 3o, cross-build the allocator service and mapper library
 
-Stage 3n-c (reported, `gralloc-check-5P1tJgj8`) succeeded for the
-`cros_gralloc` core: `cros_gralloc_buffer.cc`, `cros_gralloc_driver.cc` and
-`cros_gralloc_helpers.cc` now pass the syntax-only Android arm64 check (this
-means the code parses and type-checks against the headers we have; nothing was
-built or run). `hardware/gralloc.h` resolved after fetching `include_all`.
-The service files (`Allocator.cpp`, `Main.cpp`, `Mapper.cpp`) still stop at
-`fmq/MQDescriptorBase.h`, which is now fetched at `system_libfmq/base/` but not
-on the include path; the check script now adds that directory. I have not run
-the updated script.
+Stage 3n-d (reported, `gralloc-check-Vzan2kf4`): all six checked files now pass
+the syntax-only Android arm64 check with no missing headers (`Allocator.cpp`,
+`Main.cpp`, `Mapper.cpp`, `cros_gralloc_buffer.cc`, `cros_gralloc_driver.cc`,
+`cros_gralloc_helpers.cc`). That is a parse/type-check result only.
+
+This step compiles to object files for Android arm64 (with the NDK sysroot
+and the header set above): the three front ends, all of `cros_gralloc/*.cc` and
+`cros_gralloc/gralloc4/*.cc`, the generated AIDL `.cpp` files from stage 3j and
+`aidlcommonsupport`'s `NativeHandle.cpp`. It then links
+`allocator-service.minigbm` (an executable) and `mapper.minigbm.so` against the
+stage 3e `libminigbm`/`libdrm` and the image's `libbase`, `libcutils`,
+`libhidlbase`, `libgralloctypes`, `libutils`, `libhwbinder` and friends
+(listing which of those the image actually has), plus the NDK's
+`libbinder_ndk`. Unresolved symbols are reported rather than hidden, so link
+errors will tell us what is still missing. Nothing is installed or run. I have
+not run this script here; compile or link errors are likely.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gralloc-check-*` directory with logs and
-`report.txt`. Earlier results are only read; nothing is installed. Delete the
-directory to reverse.
+Creates one new `work/asahi/gralloc-build-*` directory (objects, the two linked
+files, `report.txt`). Earlier results are only read; nothing is installed.
+Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/check-gralloc-service-build.sh
+bash asahi/build-gralloc-service.sh
 ```
 
 Send the printed `report.txt`.
