@@ -1583,7 +1583,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1 and 2 complete; stage 1b is next
+## Graphics: stages 0, 1 and 2 complete; stage 3a is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -1621,28 +1621,45 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 1b, Apple tiled and compressed layouts
+### Next: Graphics stage 3a, read minigbm's source for an Asahi path
 
-Stage 1 (result below) passed, but GBM chose linear even when not asked to, so
-Apple's own GPU layouts were not tested. The probe now also asks GBM for
-Apple's tiled (`0x0c00000000000001`) and compressed (`0x0c00000000000002`)
-modifiers explicitly, the two non-linear modifiers Honeykrisp listed. Same
-scope as stage 1: render node only, no display, GNOME unaffected.
+The Android allocator service and mapper still need an implementation. The
+earlier VM port reused Cuttlefish's prebuilt minigbm, which allocates through
+the kernel driver it recognises by name. This step reads minigbm's source, in
+both AOSP's copy and ChromiumOS upstream, to find out whether it already
+recognises `asahi` or `apple`, how it picks a DRM node, whether a generic
+dumb-buffer or Mesa-backed path exists, and how its mapper 5 and allocator
+targets are built. The result decides what stage 3 builds; nothing is assumed
+to work yet.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gbm-dmabuf-*` directory with the probe and its
-logs; delete it to reverse.
+Creates one new `work/asahi/minigbm-src-*` directory with two shallow git
+clones and `report.txt`. Nothing is built, installed or run from them, and no
+device is opened. Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/run-gbm-dmabuf.sh
+bash asahi/inspect-minigbm-source.sh
 ```
 
-Send the output. The summary line gives a result per layout. A tiled or
-compressed failure is a result, not a blocker: scanout is linear-only anyway
-(stage 0), so it only decides whether GPU-only Android buffers can use
-Apple's layouts.
+Send the printed `report.txt` (attach it if it is long).
+
+### Result: Graphics stage 1b, Apple tiled and compressed layouts (passed)
+
+Operationally tested, reported by the user from
+`work/asahi/gbm-dmabuf-0tvfywxX`: all four cases passed (`linear`,
+`driver-layout`, `apple-tiled`, `apple-compressed`). GBM allocated exactly the
+requested modifier each time (`0x0c00000000000001` and `0x0c00000000000002`),
+Honeykrisp imported it from the dma-buf with that modifier, and both the
+Vulkan readback and GBM's CPU map read 65536/65536 pixels `0xff204080`. The
+compressed image is 264192 bytes, 2048 more than the others. GBM reported
+stride 1024 for every layout, and the probe passed that as the plane pitch.
+GBM's default allocation (no modifier requested) is still linear.
+
+So Mesa's GBM on the Asahi render node can allocate linear, tiled and
+compressed buffers that round-trip with Honeykrisp in one process. Sharing
+between processes, Android and the display remain untested.
 
 ### Result: Graphics stage 1, GBM to Vulkan dma-buf round trip (passed)
 
