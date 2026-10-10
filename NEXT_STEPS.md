@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): extract the apex payloads ("Next action:
-bring-up stage B2a", below) and paste its output.
+Bring-up track (separate thread): run the chroot smoke test ("Next action:
+bring-up stage B3a", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -561,29 +561,50 @@ What this changes in the plan:
   `.` after the modes is Fedora's own label on our files.
 - Not shown: that anything in the tree runs.
 
-## Next action: bring-up stage B2a, extract the apex payloads into `/apex`
+## Results: bring-up stage B2a, apex payloads extracted (reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: writes only
-under the extracted tree's `apex/` directory (expected a few hundred MB up to
-about 2 GiB), in your home filesystem. The `.apex` files are only read; nothing
-is mounted or executed. Loss: none. Reversal: the script prints a `rm -rf
-.../apex/*` command to run in the namespace (or remove the whole tree with the
-command from the previous step).
+- 43 of 45 apexes extracted into `/apex/<name>` in the tree (801 MB). The two
+  skipped are the CTS shim apex and the Widevine vendor apex (no readable apex
+  name). Names come from each manifest, so `com.google.android.art` is
+  `com.android.art`, `...tzdata6` is `com.android.tzdata`, and so on.
+- Present now: `com.android.runtime/bin/linker64`, `bin/linkerconfig`,
+  `lib64/bionic/libc.so`; `com.android.art/bin/dalvikvm64`,
+  `javalib/core-oj.jar`; i18n `etc/icu`; tzdata `etc/tz/tzdata`; conscrypt
+  `libjavacrypto.so`; sdkext `bin/derive_classpath` and `bin/derive_sdk`.
+- `system/bin/linker64` and `system/lib64/libc.so` are symlinks into
+  `/apex/com.android.runtime`, and `system/bin/hwservicemanager` is a symlink to
+  `/system/system_ext/bin/hwservicemanager`; all resolve inside a chroot.
+- Not shown: that any of these run.
 
-Why: Bionic's `libc.so`, the linker, `dalvikvm64`, `linkerconfig`,
-`derive_classpath` and the ICU/tzdata/conscrypt libraries live in apexes that
-`apexd` would mount at `/apex/<name>` on a device. With them extracted, a
-`chroot` into the tree can run the image's own programs directly, with no
-per-program library copying. The script reads each apex's real name from its
-`apex_manifest.pb` (for example the Google ART apex is `com.android.art`),
-extracts every uncompressed erofs payload it can, and lists what was skipped.
+## Next action: bring-up stage B3a, chroot smoke test of Bionic, linkerconfig, derive_classpath and ART
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: creates one
+small `work/asahi/root-smoke-*` directory (the script, a log, an strace trace of
+the ART start) in your checkout. The extracted tree is mounted read-only in a
+private mount namespace, and private tmpfs mounts over `/dev`, `/data`, `/tmp`,
+`/linkerconfig` and `/mnt` take everything the programs write; they disappear
+when the run ends. Nothing else is written. Loss: none. Reversal: delete the
+printed directory. No sudo, no SELinux module, no binder, no host device except
+bind mounts of the six character devices `null`, `zero`, `full`, `random`,
+`urandom` and `tty`.
+
+What it does, each step reported separately (a failing step does not stop the
+next): shell and `toybox` from the image in a chroot; `toybox id` as uid 1036
+and 1000 (tests the multi-id mapping with real service ids); `linkerconfig`
+generating `/linkerconfig/ld.config.txt` from the apexes; `derive_classpath`
+building `BOOTCLASSPATH`; `dalvikvm64 -help`; then a `dalvikvm64` start with the
+system `boot.art` and a main class that does not exist (so success means the VM
+started, loaded its boot image and reached class lookup; "class not found" is
+the expected end). If `strace` is installed, failed opens are listed. This is
+not Android `init`: no property service, no `logd`, no binder, no zygote.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/extract-apexes.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-in-root.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B2a`. Paste the output into the
-thread titled "Remaining steps to boot Android".
+Its first line reads `=== BRING-UP THREAD, STAGE B3a`. It takes up to a few
+minutes; paste the output into the thread titled "Remaining steps to boot
+Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 
