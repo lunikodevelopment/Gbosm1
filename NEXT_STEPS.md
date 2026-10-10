@@ -13,9 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the read-only ART/zygote scan (first section after the stage
-8b results, below) and paste its output. Stage 8b passed; you chose the ART
-runtime as the next direction.
+Next action: run the apex inspection (first section after the stage 8b
+results, below) and paste its output. The ART scan is done (results below).
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -424,6 +423,39 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-art.py
 ```
 
 Paste the terminal output.
+
+## Next action: apex inspection (copies five apex files; nothing is run)
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: one new
+`work/asahi/apex-scan-*` directory in your checkout holding copies of five apex
+files (runtime, art, i18n, tzdata6, conscrypt; a few hundred MB at most).
+Filesystem: your home filesystem. The image is only read; nothing is mounted,
+unpacked or executed. Loss: none. Reversal: delete the printed directory.
+
+Why: ART needs the runtime and art apex payloads mounted at `/apex/...`. This
+reports each file's zip members and whether the payload is ext4 or erofs and
+stored uncompressed, which decides how the payload can be exposed in the
+private root without a loop mount.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-apex.py
+```
+
+Paste the terminal output.
+
+## Results: ART / zygote scan (`art-scan-gmclkum2`; enumerated, nothing run)
+
+- 39 apex files in `/system/apex`, including `com.android.runtime`,
+  `com.google.android.art`, `i18n`, `tzdata6`, `conscrypt`.
+- `/system/bin` has `app_process`, `app_process64`, `linker64`, `installd`,
+  `bootanimation`, `zygote_cli` and `zygote_next`.
+- `/system/framework` has 16 boot-image files (`.art/.oat/.vdex`) and 163 jars;
+  `system_ext_a:/framework` has 233 entries.
+- Zygote runs from `init.zygote64.rc`: `app_process64 -Xzygote /system/bin
+  --zygote --start-system-server --socket-name=zygote`, with a stream socket
+  `zygote` (660 root system). Its classpath comes from init properties, which
+  the private root does not provide, so it must be supplied by hand.
+- Not shown: that any apex is valid, mountable or complete, or that ART starts.
 
 ## Results: stage 8b (`real-servicemanager-wn7agd9c`)
 
