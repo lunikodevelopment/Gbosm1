@@ -2136,7 +2136,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3e complete; stage 3f is next
+## Graphics: stages 0, 1, 2 and 3a-3f complete; stage 3g (survey) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2174,32 +2174,47 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3f, minigbm and Honeykrisp in one Bionic process
+### Next: Graphics stage 3g, what the allocator service and mapper need (read only)
 
-Stage 3e (below) showed the Android-built patched minigbm allocating under the
-image's linker. This step uses both Android-built libraries together in one
-Android process, which is the core of what the allocator service and the
-mapper will do: minigbm allocates a 256x256 ARGB8888 linear buffer on the
-display card node, the CPU fills it, Honeykrisp (loaded directly as an ICD,
-no Android Vulkan loader) imports the dma-buf as a linear image, copies it out
-and clears it, then the CPU reads the result through the dma-buf mapping. The
-checks match stages 3b and 3d on glibc: `cpu_to_gpu` and `gpu_to_cpu`. The
-probe's logic was checked for syntax here only; its Android build and run are
-untested.
+The graphics core is now demonstrated under Bionic (stage 3f, below). What is
+left on the buffer side is minigbm's `cros_gralloc/` code: the AIDL allocator
+service (`aidl/`) and the stable-C mapper (`mapper_stablec/`), which the image
+reaches through `libui`. Those include Android headers the NDK lacks and, for
+the AIDL parts, generated code. This step does not build anything: it lists
+every header those sources include and whether the NDK sysroot has it, prints
+the service entry points, `Main.cpp`, the Soong files, init and VINTF
+snippets, and checks whether an AIDL compiler exists on this machine. The
+result decides how the service is built (shims, a hand-written Binder service,
+or a way to run AOSP's `aidl`); nothing is assumed.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gfx-bionic-*` directory: a copy of the stage 3e
-linker and library set, the probe and `report.txt`. Earlier results are only
-read. One 256x256 dumb buffer is allocated on the display card node for the
-run only; no modeset, no DRM master. Delete the directory to reverse.
+Creates one new `work/asahi/gralloc-survey-*` directory holding only
+`report.txt`. Everything else is only read; nothing is downloaded or built.
+Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/run-gfx-bionic.sh
+bash asahi/survey-cros-gralloc.sh
 ```
 
-Send the printed `report.txt`.
+Send the printed `report.txt` (attach it, it will be long).
+
+### Result: Graphics stage 3f, minigbm and Honeykrisp in one Bionic process (passed)
+
+Operationally tested, reported by the user from
+`work/asahi/gfx-bionic-1sojDH2h` (first run, no changes needed):
+
+- One process under the image's `linker64`, `page_size=16384`, as the ordinary
+  user: the Android-built patched minigbm allocated a 256x256 ARGB8888 buffer
+  on the `apple` card node (dma-buf 262144 bytes, stride 1024) and the
+  Android-built Honeykrisp, loaded directly as an ICD, reported `Apple M1
+  (G13G B1)` and imported the dma-buf as a linear image.
+- CPU write then GPU read: 65536/65536 pixels `0xff112233`. GPU clear then CPU
+  read through the dma-buf mapping: 65536/65536 pixels `0xff204080`.
+- Not covered: Android's own Vulkan loader and HAL lookup, other processes
+  (the same dma-buf passed over Binder), tiled or compressed buffers, scanout,
+  fences, the allocator service and mapper.
 
 ### Result: Graphics stage 3e, Android-built minigbm under Bionic (passed)
 
