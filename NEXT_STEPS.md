@@ -2184,6 +2184,14 @@ probe also built. The run step then failed with `linker: error: expected
 absolute path: "./probe-minigbm-bionic"`: the image's linker wants absolute
 paths (the stage 2d runner already used them). The script now does too.
 
+Fourth run (reported by the user, `work/asahi/minigbm-bionic-fO4Ujc7x`): the
+image linker started and the probe ran (`page_size=16384`; the missing
+`/linkerconfig/ld.config.txt` warning is expected outside Android), but
+`dlopen` of `libminigbm.so` failed: `cannot locate symbol
+"__android_log_vprint"`. `drv.c` logs through it and my build did not link
+`liblog`, so the library's `DT_NEEDED` lacked `liblog.so`. The script now links
+`-llog` (the stage 2d library set already contains the image's `liblog.so`).
+
 Not built yet, and needed for the allocator service and mapper: minigbm's
 `cros_gralloc/` code also includes `cutils/native_handle.h`,
 `hardware/gralloc.h`, `cutils/properties.h` and `sync/sync.h`. Those are the next

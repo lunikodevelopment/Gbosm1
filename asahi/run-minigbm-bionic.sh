@@ -45,7 +45,7 @@ echo '== Build libminigbm for Android (make -k, serial so errors stay readable)'
 # PKG_CONFIG=true makes every pkg-config probe in the Makefile print nothing, so no host paths leak in.
 # -Qunused-arguments: common.mk compiles with -Werror, and clang flags the linker-only -Wl option on compile steps.
 if (cd "$OUT/minigbm" && make -k OUT="$OUT/minigbm-build" CC="$TOOL -Qunused-arguments" PKG_CONFIG=true \
-        PC_CFLAGS="$INC" PC_LIBS="-L$(dirname "$LIBDRM_SO") -ldrm") >"$OUT/make.log" 2>&1; then
+        PC_CFLAGS="$INC" PC_LIBS="-L$(dirname "$LIBDRM_SO") -ldrm -llog") >"$OUT/make.log" 2>&1; then
     echo 'make exit status: 0'; else echo "make exit status: $?"; fi
 grep -E 'error|Error' "$OUT/make.log" | sort -u | head -40
 tail -8 "$OUT/make.log"
