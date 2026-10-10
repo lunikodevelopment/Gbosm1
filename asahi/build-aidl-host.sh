@@ -6,6 +6,7 @@ set -uo pipefail
 [[ $(uname -s) == Linux ]] || { echo 'Run on Fedora Asahi Linux.' >&2; exit 1; }
 [[ $(id -u) != 0 ]] || { echo 'Run as your ordinary user, without sudo.' >&2; exit 1; }
 for c in clang++ bison flex python3; do command -v $c >/dev/null || { echo "Missing $c." >&2; exit 1; }; done
+[[ -f /usr/include/gtest/gtest.h ]] || { echo 'Missing gtest headers (aidl_checkapi.cpp uses gtest assertions). Install with: sudo dnf install gtest-devel' >&2; exit 1; }
 [[ -f /usr/include/fmt/chrono.h ]] || { echo 'Missing fmt headers (libbase needs them). Install with: sudo dnf install fmt-devel' >&2; exit 1; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 W=$ROOT/work/asahi
@@ -24,9 +25,6 @@ git -C "$A" log -1 --format='aidl COMMIT %H %cI'
 git -C "$B" log -1 --format='libbase COMMIT %H %cI'
 git -C "$HI" log -1 --format='hardware/interfaces COMMIT %H %cI'
 mkdir -p "$OUT/obj" "$OUT/gen-parser" "$OUT/stubs/gtest"
-# Test-only header some includes may name; harmless if unused.
-printf '#pragma once\n#define FRIEND_TEST(test_case_name, test_name) friend class test_case_name##_##test_name##_Test\n' > "$OUT/stubs/gtest/gtest_prod.h"
-printf '#pragma once\n#include <gtest/gtest_prod.h>\n' > "$OUT/stubs/gtest/gtest.h"
 
 echo '== Lexer and parser'
 bison -d -o "$OUT/gen-parser/aidl_language_y.cpp" "$A/aidl_language_y.yy" 2>&1 | tail -5
@@ -60,7 +58,7 @@ if [[ -n $FAILED ]]; then
 fi
 echo "Compiled $(ls "$OUT"/obj/*.o | wc -l) objects."
 echo '== Link'
-if clang++ -pthread "$OUT"/obj/*.o -o "$OUT/aidl" 2>&1 | head -30; [[ -x $OUT/aidl ]]; then
+if clang++ -pthread "$OUT"/obj/*.o -lgtest -o "$OUT/aidl" 2>&1 | head -30; [[ -x $OUT/aidl ]]; then
     "$OUT/aidl" --help 2>&1 | head -6
 else
     echo "Stopped at link. Send $OUT/report.txt"; exit 1

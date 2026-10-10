@@ -2313,11 +2313,14 @@ package install (the only system change; reverse with `sudo dnf remove fmt-devel
 sudo dnf install fmt-devel
 ```
 
-Second run (reported): fmt-devel installed, and 33 of 34 units compiled.
-Only `aidl_checkapi.cpp` failed (`gtest/gtest.h`); the script now stubs that
-header. fmt is already installed, so rerun without the dnf line:
+Second and third runs (reported): fmt-devel installed, and 33 of 34 units
+compiled. Only `aidl_checkapi.cpp` failed: it uses real gtest assertions
+(`testing::`, `EqHelper`), so a stub header is not enough. The script now uses
+the real gtest and links `-lgtest`. One more package install (reverse with
+`sudo dnf remove gtest-devel`):
 
 ```bash
+sudo dnf install gtest-devel
 cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-aidl-host.sh
 ```
