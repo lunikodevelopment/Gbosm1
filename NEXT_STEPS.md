@@ -5,14 +5,16 @@ and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
 Current status: Bionic Toybox execution, native Binder echo, Android libbinder's
-empty-list request/reply, and native Binder object/FD transfer all passed on
-Fedora Asahi ARM64/16 KiB.
+empty-list request/reply, native Binder object/FD transfer, and the Android
+returned-object plus outgoing-FD Parcel probe all passed on Fedora Asahi
+ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: confirm the latest Android Parcel result with the read-only check
-below (receipt verification, exit statuses, cleanup). Retain all earlier results;
-no probe needs to be rerun.
+Next action: none is queued. The Android Parcel probe is complete. Candidate
+next probes (each needs its own evidence and a runbook entry before it is run):
+Android receiving and reading an FD, or Android exporting a local Binder object.
+Retain all earlier results; no completed probe needs rerunning.
 
 ## Android Parcel probe: markers passed with the 52-byte lookup reply
 
@@ -31,21 +33,21 @@ generated checkService2 client consumes before the `Service` union
 stability 12, lazy bool; 52 bytes) passed. The outer-word explanation is an
 inference from the failures and the pass, not read from `BpServiceManager::checkService2`.
 
-If confirmed, this establishes: the image's libbinder decoded a returned
+This establishes: the image's libbinder decoded a returned
 Binder object, called it, and serialized an outgoing FD Parcel that the native
 endpoint verified. It does not establish Android receiving or reading an FD,
 exporting a local Binder object, full lifetimes, death notifications, DMA-BUF,
 fences, real servicemanager, HALs, Android boot or graphics.
 
-### One command: confirm the latest Parcel result (read-only)
+### Confirmed result
 
-No storage is modified. On the M1:
-
-```bash
-cd ~/Gbosm1/work/asahi && d=$(ls -dt android-parcel-probe-* | head -1) && echo "$d" && python3 -c 'import json,sys; s=json.load(open(sys.argv[1]+"/summary.json")); print({k:s.get(k) for k in ("exit_status","android_receipt_verified","cleanup","error")}); print(s.get("android_client_stdout"))' "$d" && grep -E 'exit status|AVC|no matches' "$d/report.txt" | tail -12
-```
-
-Say **get logs** with the output.
+Reported by the user from `work/asahi/android-parcel-probe-edolfdu5`
+(read-only check): `exit_status` 0, `android_receipt_verified` True, cleanup
+codes 0 and 0, `error` None; the client printed `Result: Parcel( 47504231
+00004000)`. Build, device-context, libraries, existing-modules, policy-install,
+probe-label, parcel-call, restore-context and policy-remove all exit 0; the
+AVC query returned `<no matches>` (exit 1 is grep's no-match). Not run again
+at the time of writing: no manual cleanup is needed.
 
 ## One command: Android returned object and outgoing FD Parcel
 
