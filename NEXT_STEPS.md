@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5c", below) and paste its output.
+bring-up stage B5d", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -812,26 +812,46 @@ Operationally tested on the M1:
 - Also seen: the crash handler cannot run (expected), and the dump's frames show
   host paths because the tree is bind-mounted.
 
-## Next action: bring-up stage B5c, same run, now printing the abort reason and the credential syscalls
+## Results: bring-up stage B5c (`root-smoke-lsabx6qe`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5b: the
+- **The abort reason is found** (log line before the dump):
+  `JNI FatalError called: (system_server) Not allowlisted (6): /home/gbos_user/Gbosm1/work/asahi/android-root-7nqprryz/root/apex/com.android.art/javalib/core-oj.jar`.
+  Before forking system_server, zygote checks every open file against an
+  allowlist of device paths (`/apex/com.android.art/javalib/core-oj.jar` is one). It read
+  the file's path as the **host path of the tree**, so the check refused it.
+  No credential syscall failed (`setgroups`, `setresuid`, `capset` are not in the
+  failed list; only `setpriority -8` is refused, a warning).
+- Why the host path shows: not proven. The stack dump also lists host paths for
+  `libart.so`, so the paths the kernel reports for files opened under `chroot` here
+  are the full host paths.
+- **Much of system_server's service code already ran in zygote's preload**: the log
+  has framework messages such as `FeatureFlagsImplExport` (aconfig packages
+  `android.xr` and `com.android.scheduling.flags` not found on the device),
+  `ActivityRecognitionHardware`, `VibratorInfo` (no HAL data). They are errors the
+  sandbox is expected to produce; none stopped zygote.
+
+## Next action: bring-up stage B5d, zygote enters the tree with pivot_root instead of chroot
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5c: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
-or flash change.
+or flash change. `pivot_root` acts only inside the private mount namespace of the
+test; the host's root is not touched (the old root is detached with `umount -l`
+inside the namespace).
 
-What changes: a new section prints only the error and fatal log lines, without the
-stack dump, which includes the abort reason; and the trace also records `setgroups`,
-`setresuid`, `setresgid`, `capset`, `prctl`, `unshare`, `mount`, `seccomp` calls, so
-the failing one is named in the "failed calls" list.
+What changes: the zygote launcher makes the tree the namespace's own root with the
+`pivot_root` call (falls back to `chroot` and prints that it did), so open files
+should show `/apex/...` and `/system/...` paths as on a device. A new step "S2b"
+also prints what path a file opened inside the plain `chroot` shows, and the first
+lines of the mount table there, so the cause can be read directly.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
 ```
 
 Its first line reads `=== BRING-UP THREAD, STAGE B5a`. Paste only the command output
-(not the prompt line, and no stray characters) into this thread, "Remaining steps to
-boot Android".
+(not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 

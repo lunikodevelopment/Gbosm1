@@ -55,6 +55,9 @@ CPENV=()
 while read -r a b c; do [ "$a" = export ] && CPENV+=("$b=$c"); done < "$ROOT/data/system/environ/classpath"
 echo "classpath variables: $(printf '%s ' "${CPENV[@]%%=*}")"
 
+say "S2b what path an open file shows inside the root (zygote's fd allowlist compares these), chroot form"
+timeout 20 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/sh -c 'exec 3</apex/com.android.art/javalib/core-oj.jar; /system/bin/toybox readlink /proc/self/fd/3; head -n 4 /proc/self/mountinfo | cut -c1-200' 2>&1
+
 say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
 if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority' -o "$OUT/zygote.trace"); else TR=(); fi
@@ -79,9 +82,33 @@ echo; echo "steps finished"
 '''
 
 
+def enter_root(root):
+    """Make `root` the process's root with pivot_root (falls back to chroot, and says so).
+
+    Zygote compares the path of every open file with an allowlist before forking system_server.
+    Under chroot the paths it read were the host paths of the tree; after pivot_root the tree is
+    the namespace's own root, so they should read /apex/... and /system/... as on a device.
+    """
+    import ctypes
+    import platform
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        number = {"aarch64": 41, "x86_64": 155}[platform.machine()]
+        os.chdir(root)
+        if libc.syscall(number, b".", b".") != 0:
+            raise OSError(ctypes.get_errno(), "pivot_root")
+        if libc.umount2(b".", 2) != 0:
+            raise OSError(ctypes.get_errno(), "umount2")
+        os.chdir("/")
+        print("root entered with pivot_root", flush=True)
+    except (OSError, KeyError) as error:
+        print(f"pivot_root failed ({error}); using chroot", flush=True)
+        os.chroot(root)
+        os.chdir("/")
+
+
 def launch_zygote(root, env_items):
-    os.chroot(root)
-    os.chdir("/")
+    enter_root(root)
     sockets = Path("/dev/socket")
     sockets.mkdir(parents=True, exist_ok=True)
     flags = [item for item in env_items if item.startswith("--")]
