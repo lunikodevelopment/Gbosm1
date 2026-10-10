@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the logd, linker-config and ART smoke test ("Next action:
-bring-up stage B3e", below) and paste its output.
+bring-up stage B3f", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -669,27 +669,48 @@ Operationally tested on the M1:
   not yet known. The ART start itself (S5) failed with the same message.
 - `derive_classpath` still succeeds.
 
-## Next action: bring-up stage B3e, logd without audit/kernel logging, linkerconfig log, ART library error
+## Results: bring-up stage B3e (`root-smoke-aij59b78`; reported by the user)
+
+- **The capability hypothesis was wrong, and the real cause is found.** With
+  `ro.logd.auditd=false` and `ro.logd.kernel=false` `logd` got past `DropPrivs`. Its
+  own message, captured through the stand-in `/dev/kmsg` file, is
+  `SocketListener: Failed to start unbound listener`. The trace shows why:
+  `getsockname` on the passed-in `logdr` socket returned the host path
+  `/home/gbos_user/.../root/dev/socket/logdr` (my launcher bound the socket
+  before chrooting, and a Unix socket keeps the path string it was bound with).
+  `android_get_control_socket` expects `/dev/socket/logdr`, so `logd` fell back to
+  making its own socket, failed to unlink the existing file (`EACCES`, the
+  directory belongs to root) and failed to bind (`EADDRINUSE`). Fixed in this
+  stage: the launcher now chroots first and binds at `/dev/socket/<name>`.
+- **`linkerconfig` again wrote only its two files.** The reason is still lost
+  because `logd` is not running; no change.
+- **ART library failure text** was cut off at an escaped quote by my search
+  pattern, so the missing library is still unnamed. This stage prints the whole
+  message and a read of the ELF files' `DT_NEEDED` closure.
+- `getprop` still reads the property area correctly (37 and true).
+
+## Next action: bring-up stage B3f, logd with correctly bound sockets, linkerconfig log, ART library closure
 
 **THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B3a to
-B3d: one small `work/asahi/root-smoke-*` directory (script, logs, strace traces);
+B3e: one small `work/asahi/root-smoke-*` directory (script, logs, strace traces);
 the tree stays mounted read-only; private tmpfs mounts take every other write and
 vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no
 SELinux module, no binder.
 
-What changes: the property area also sets `ro.logd.auditd=false` and
-`ro.logd.kernel=false` so `logd` does not need capabilities it cannot have as
-uid 1036 (this tests the hypothesis above); a plain file stands in for
-`/dev/kmsg` so `logd`'s own fatal message is captured and printed; the strace
-view of `logd` drops start-up noise; and the `dalvikvm64` library failure is
-printed in full under `strace`. If `logd` stays up, `linkerconfig` runs with a
-working log and `logcat -d` should show why it generated no per-apex configs.
+What changes: the `logd` launcher binds its three sockets after `chroot`, then
+drops to uid 1036 with groups 1000, 1032, 3009 and executes `/system/bin/logd`
+(no `strace` wrapper now; its messages go to the stand-in `/dev/kmsg` file). If
+`logd` stays up, `linkerconfig` runs against a working log and `logcat -d` is
+printed. The `dalvikvm64` failure text is printed in full, and
+`asahi/elf-needed.py` lists every library in the `DT_NEEDED` closure of
+`dalvikvm64` and `libart.so` that cannot be found with the test library path
+(read-only, from the ELF headers).
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-logd-art.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B3e`. Paste only the command
+Its first line reads `=== BRING-UP THREAD, STAGE B3f`. Paste only the command
 output (not the prompt line) into the thread titled "Remaining steps to boot
 Android".
 

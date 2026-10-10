@@ -25,7 +25,7 @@ import tempfile
 SOCKETS = [("logd", socket.SOCK_STREAM, 0o666), ("logdr", socket.SOCK_SEQPACKET, 0o666), ("logdw", socket.SOCK_DGRAM, 0o222)]
 
 SCRIPT = r'''#!/bin/bash
-ROOT="$1"; OUT="$2"; PY="$3"; SELF="$4"; PROPS="$5"
+ROOT="$1"; OUT="$2"; PY="$3"; SELF="$4"; PROPS="$5"; ELFNEEDED="$6"
 say() { printf '\n### %s\n' "$*"; }
 mount --bind "$ROOT" "$ROOT" && mount -o remount,bind,ro "$ROOT" || { echo "FATAL: read-only bind of the tree failed"; exit 1; }
 for d in dev data tmp linkerconfig mnt; do
@@ -53,16 +53,12 @@ say "S0 property area (one regular file at /dev/__properties__, root-owned, 0444
 ls -ln "$ROOT/dev/__properties__" 2>&1
 
 say "S1 logd with sockets passed in (as init does), uid 1036"
-"$PY" "$SELF" --launch "$ROOT" "$OUT/logd.trace" > "$OUT/logd.out" 2>&1 &
+"$PY" "$SELF" --launch "$ROOT" > "$OUT/logd.out" 2>&1 &
 LOGDPID=$!
 sleep 3
 if kill -0 "$LOGDPID" 2>/dev/null; then echo "logd still running (pid $LOGDPID)"; else echo "logd EXITED"; fi
 echo "--- logd output:"; head -n 20 "$OUT/logd.out" | cut -c1-240
 echo "--- logd messages written to the stand-in /dev/kmsg:"; head -n 15 "$ROOT/dev/kmsg" | cut -c1-240
-echo "--- logd strace, failed calls after start-up (last 20, noise removed):"
-grep -E '= -1 E' "$OUT/logd.trace" 2>/dev/null | grep -v -E 'PR_SET_VMA|readlinkat|ld.so.preload|nsswitch|ld.config|/odm/lib64' | sed -E 's/^[0-9]+ +//' | cut -c1-200 | tail -n 20
-echo "--- logd strace, last 14 lines without mprotect:"
-grep -v mprotect "$OUT/logd.trace" 2>/dev/null | tail -n 14 | cut -c1-220
 ls -l "$ROOT/dev/socket" | head -n 8
 echo "--- getprop through the image's own getprop:"
 trimmed inroot /system/bin/getprop ro.build.version.sdk
@@ -96,10 +92,13 @@ if command -v strace >/dev/null 2>&1; then
     /apex/com.android.art/bin/dalvikvm64 -help 2>&1 | head -n 8
   echo "exit status: ${PIPESTATUS[0]}"
   echo "--- the dlopen failure text, in full:"
-  grep -a -o 'Failed to dlopen[^"]*\|dlopen failed[^"]*' "$OUT/s3b.trace" | head -n 3 | cut -c1-600
+  grep -a -m1 'Failed to dlopen' "$OUT/s3b.trace" | sed 's/.*Failed to dlopen/Failed to dlopen/; s/\\"/"/g' | cut -c1-500
 else
   LINES_MAX=8 trimmed inroot LD_LIBRARY_PATH=$LDPATH /apex/com.android.art/bin/dalvikvm64 -help
 fi
+
+echo "--- unresolved libraries of dalvikvm64 and libart.so with that path (read from the ELF files):"
+"$PY" "$ELFNEEDED" "$ROOT" "$LDPATH" /apex/com.android.art/bin/dalvikvm64 /apex/com.android.art/lib64/libart.so 2>&1 | head -n 30
 
 say "S4 derive_classpath, with strace; then what the log recorded"
 if command -v strace >/dev/null 2>&1; then
@@ -137,8 +136,15 @@ echo; echo "steps finished"
 
 
 def launch(root):
-    """Create logd's sockets like init, then exec the image's logd as 1036 in the chroot."""
-    sockets = Path(root) / "dev/socket"
+    """Create logd's sockets like init, then run the image's logd as 1036.
+
+    The sockets are bound after chroot(root), so their recorded path is /dev/socket/<name>:
+    android_get_control_socket compares that path, and logd falls back to making its own
+    sockets (and then fails to unlink and bind them) if it sees a host path instead.
+    """
+    os.chroot(root)
+    os.chdir("/")
+    sockets = Path("/dev/socket")
     sockets.mkdir(parents=True, exist_ok=True)
     env = {"ANDROID_ROOT": "/system", "ANDROID_DATA": "/data", "PATH": "/system/bin"}
     keep = []
@@ -155,13 +161,11 @@ def launch(root):
         os.set_inheritable(s.fileno(), True)
         keep.append(s)  # an unreferenced socket would be closed and its fd number reused
         env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
-        print(f"socket {name}: fd {s.fileno()} mode {mode:o}", flush=True)
-    chroot = shutil.which("chroot") or "/usr/sbin/chroot"
-    command = [chroot, "--userspec=1036:1036", "--groups=1000,1032,3009", str(root), "/system/bin/logd"]
-    trace = sys.argv[3] if len(sys.argv) > 3 else None
-    if trace and shutil.which("strace"):
-        command = [shutil.which("strace"), "-f", "-s", "200", "-o", trace] + command
-    os.execve(command[0], command, env)
+        print(f"socket {name}: fd {s.fileno()} bound at {path} mode {mode:o}", flush=True)
+    os.setgroups([1000, 1032, 3009])
+    os.setgid(1036)
+    os.setuid(1036)
+    os.execve("/system/bin/logd", ["logd"], env)
 
 
 def main():
@@ -169,7 +173,7 @@ def main():
         launch(sys.argv[2])
     if os.geteuid() == 0:
         sys.exit("run as your ordinary user, without sudo")
-    print("=== BRING-UP THREAD, STAGE B3e: LOGD WITHOUT AUDIT/KERNEL LOGGING, LINKERCONFIG LOG, ART LIBRARY ERROR (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE B3f: LOGD SOCKET PATH FIX, LINKERCONFIG LOG, ART LIBRARY CLOSURE (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")
@@ -186,7 +190,8 @@ def main():
     script.write_text(SCRIPT)
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
                "bash", str(script), str(root), str(out), shutil.which("python3") or "python3", str(Path(__file__).resolve()),
-               str(Path(__file__).with_name("make-property-area.py").resolve())]
+               str(Path(__file__).with_name("make-property-area.py").resolve()),
+               str(Path(__file__).with_name("elf-needed.py").resolve())]
     done = subprocess.run(command, capture_output=True, text=True, timeout=900)
     text = done.stdout + done.stderr
     (out / "log.txt").write_text(text)
