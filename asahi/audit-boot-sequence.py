@@ -144,6 +144,7 @@ def main():
     graphics = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(graphics)
     _, logical = recovery.partitions(image)
+    print("=== BRING-UP THREAD, STAGE B0: BOOT-SEQUENCE SCAN (paste in the \"Remaining steps to boot Android\" thread) ===")
     print("THIS STEP MODIFIES STORAGE")
     print("Creates one new boot-sequence report directory under work/asahi. The image is only read; nothing is executed.")
     print("Delete the newly printed result directory to reverse it.")

@@ -498,7 +498,9 @@ gives the real dependency order for B3.
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-boot-sequence.py
 ```
 
-Paste the terminal output (it is long; attach it as a file if needed).
+Its first line reads `=== BRING-UP THREAD, STAGE B0: BOOT-SEQUENCE SCAN`. Paste the
+terminal output into the thread titled "Remaining steps to boot Android" (it is
+long; attach it as a file if needed).
 
 ## Next action: ART / apex / zygote scan (read-only)
 
