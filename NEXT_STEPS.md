@@ -2297,7 +2297,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3j complete; stage 3k (check the service build) is next
+## Graphics: stages 0, 1, 2 and 3a-3k complete; stage 3l (HIDL and gralloctypes dependencies) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2335,32 +2335,49 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3k, check what the allocator service and mapper still need
+### Next: Graphics stage 3l, the HIDL and gralloctypes dependencies
 
-Stage 3j gives us generated AIDL code, so this step asks the compiler what is
-still missing for the AOSP minigbm sources that implement the allocator
-service (`cros_gralloc/aidl`), the stable-C mapper (`mapper_stablec`) and the
-`cros_gralloc` core. It runs a syntax-only compile for Android arm64 against
-the stage 2c NDK sysroot, the stage 3i trees (every `include*` directory in
-them), the stage 3j generated headers and the stage 3e shims, then lists every
-missing header and whether it exists anywhere in the fetched trees. Nothing is
-built into objects or run; I expect many missing headers on the first pass
-(for example gralloc types, Binder NDK platform headers, `BufferAllocator`),
-and the list decides the next fetch or shim. I have not been able to run it
-here.
+Stage 3k showed the allocator service needs HIDL-generated mapper 4.0 and
+graphics-common 1.2 headers plus `gralloctypes/Gralloc4.h`, none of which are
+in the trees fetched so far. This step fetches a few more sparse AOSP trees
+(`frameworks/native` gralloc/nativewindow/ui, `system/libhidl`,
+`system/memory/libdmabufheap`, `system/tools/hidl`) and prints exactly how
+`Allocator.cpp`, `Main.cpp` and `Mapper.cpp` use those APIs, so the next step
+can be chosen on evidence: build `hidl-gen` like `aidl` and generate the
+headers, or patch the HIDL use out of the service. Nothing is built or run. I
+have not been able to run it here.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gralloc-check-*` directory with compiler logs and
-`report.txt`. Earlier results are only read; nothing is installed. Delete the
+Creates one new `work/asahi/aosp-gralloc-extra-*` directory with sparse
+shallow clones (tens of MB) and `report.txt`. Nothing is installed. Delete the
 directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/check-gralloc-service-build.sh
+bash asahi/inspect-gralloc-hidl-deps.sh
 ```
 
 Send the printed `report.txt`.
+
+### Result: Graphics stage 3k, service build check (syntax-only)
+
+Reported by the user from `work/asahi/gralloc-check-ZGvvqKLn`: the
+`cros_gralloc` core, `aidl/Allocator.cpp`, `aidl/Main.cpp` and
+`mapper_stablec/Mapper.cpp` all stop at the first missing header (a syntax
+check cannot go further). Missing headers, with where each lives:
+
+- `system/window.h` (6 files): not in the fetched trees.
+- `android/hardware/graphics/mapper/4.0/IMapper.h`, `.../common/1.2/types.h`
+  and `hidl/HidlSupport.h`: HIDL-generated or libhidl headers, not fetched.
+- `gralloctypes/Gralloc4.h`: not fetched.
+- `hardware/gralloc.h`: present in `hardware_libhardware/include/hardware/`
+  but not found on the path of this check (the directory is
+  `hardware_libhardware/include`; the check now also searches the extra trees).
+
+Binder NDK headers, the generated AIDL and `system/graphics.h` did not appear
+as missing at this level, which is enumerated only: headers behind a missing
+header are not seen until it is resolved.
 
 ### Result: Graphics stage 3j, native `aidl` build and allocator code generation
 

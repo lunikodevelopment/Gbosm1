@@ -23,8 +23,9 @@ OUT=$(mktemp -d "$W/gralloc-check-XXXXXXXX")
 echo "Results: $OUT"
 exec > >(tee "$OUT/report.txt") 2>&1
 echo "NDK/HK: $HK"; echo "AOSP sources: $SRC"; echo "Generated AIDL: $GEN"; echo "minigbm: $MG"
+EXTRA=$(ls -dt "$W"/aosp-gralloc-extra-* 2>/dev/null | head -1)
 # Every include-like directory in the fetched trees, so missing headers show up as "found here, not on the path".
-INCS=$(find "$SRC" -type d \( -name include -o -name include_cpp -o -name include_platform -o -name include_ndk -o -name include_sdk \) \
+INCS=$(find "$SRC" $EXTRA -type d \( -name include -o -name include_cpp -o -name include_platform -o -name include_ndk -o -name include_sdk \) \
         -not -path '*/.git/*' 2>/dev/null | sort)
 echo "Include directories found in the fetched trees: $(echo "$INCS" | wc -l)"
 IFLAGS=
@@ -50,7 +51,7 @@ for f in $FILES; do
         | grep -v '^/' | sed "s|^|$f |" >> "$OUT/missing.txt"
 done
 awk '{print $2}' "$OUT/missing.txt" | sort | uniq -c | sort -rn | while read -r cnt h; do
-    where=$(find "$SRC" -path "*/$h" -not -path '*/.git/*' 2>/dev/null | head -3 | sed "s|$SRC/||" | tr '\n' ' ')
+    where=$(find "$SRC" $EXTRA -path "*/$h" -not -path '*/.git/*' 2>/dev/null | head -3 | sed "s|$SRC/||" | tr '\n' ' ')
     echo "$h (x$cnt): ${where:-NOT IN FETCHED TREES}"
 done
 echo
