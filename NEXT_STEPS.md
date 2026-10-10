@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5j", below) and paste its output.
+bring-up stage B5k", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -900,19 +900,34 @@ Operationally tested on the M1:
   last traced `openat` that returned 60 is `/dev/urandom` (so that earlier descriptor was
   probably closed and the number reused by a call the trace does not show).
 
-## Next action: bring-up stage B5j, dump the zygote descriptor table around 60, with fdinfo and stat
+## Results: bring-up stage B5j (`root-smoke-d65l4prt`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5i: the
+- **Descriptor 60 is `/dev/urandom` after all.** fdinfo says `mnt_id: 878`, the mount the
+  probe listed as `/urandom /dev/urandom` (devtmpfs bind), and stat says character device,
+  inode 9, device 7. Inside zygote its path reads `/`, while a fresh process in the same
+  setup reads `/dev/urandom` (B5i probe). The table around it is ordinary (apex jars,
+  `/dev/null`, `framework-res.apk`, the log file, a socket).
+- **Cause (reproduced, mechanism from AOSP source):** after preload zygote unshares its
+  mount namespace (`UnmountStorageOnInit` in `com_android_internal_os_Zygote.cpp`). In
+  this test nothing else lived in the namespace zygote left, so the kernel tore it
+  down and its mounts became detached. A descriptor on a detached bind mount of a single
+  file reads as `/`. (Apex jars still read correctly because their mount's root is the
+  tree's `/`.) On a device, init stays in that namespace, so it survives. A throwaway
+  test here reproduced both cases: `/` without a process left behind, `/dev/urandom` with one.
+
+## Next action: bring-up stage B5k, keep the launcher's mount namespace alive
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5j: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: while zygote runs, the watcher also saves, for the process that holds a
-descriptor on `/`, the descriptors numbered 56 to 64 with their targets, the kernel's
-`fdinfo` for the offending one (open flags, mount id) and its `stat` (type, inode,
-device). The trace also records `fcntl`, `eventfd2`, `memfd_create`, `epoll_create1`
-and `open_by_handle_at`, which can hand out a descriptor number without an `openat`.
+What changes: just before starting `app_process64`, the launcher forks one helper that
+closes all its descriptors and sleeps in the namespace (it is killed when zygote exits),
+the role init plays on a device. The output also lists the trace's `unshare`/`mount`
+calls so zygote's own unshare is visible. Expected: the "Not allowlisted" stop goes away
+and zygote forks system_server, which should then stop at its first binder use.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server

@@ -92,8 +92,8 @@ if [ -s "$OUT/zygote.trace" ]; then
   FDN=$(timeout 30 chroot "$ROOT" /system/bin/logcat -d 2>/dev/null | grep -a -o 'Not allowlisted ([0-9]*)' | head -n 1 | tr -dc 0-9)
   echo "descriptor number: ${FDN:-none found}"
   [ -n "$FDN" ] && grep -E "\) += ${FDN}\$" "$OUT/zygote.trace" | grep -v -E 'readlinkat|socket\(|connect\(' | cut -c1-200 | tail -n 8
-  echo "--- every open of a directory named / in the trace:"
-  grep -E 'openat\(AT_FDCWD, "/", ' "$OUT/zygote.trace" | cut -c1-200 | head -n 8
+  echo "--- mount-namespace calls in the trace (zygote unshares after preload):"
+  grep -E '^[0-9]+ +(unshare|setns|mount|umount2)\(' "$OUT/zygote.trace" | cut -c1-200 | head -n 12
   echo "--- failed file/network calls in the trace, distinct (first 30):"
   grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload|SO_DOMAIN|/mnt/expand|resource-cache|/sys/devices/system/cpu|trace_marker|qgl_config|statsdw' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
   echo "--- last 10 trace lines:"; tail -n 10 "$OUT/zygote.trace" | cut -c1-200
@@ -148,6 +148,25 @@ def probe_paths(root):
             print("mountinfo:", line.strip()[:200], flush=True)
 
 
+def keep_namespace_alive():
+    """Leave one sleeping process in this mount namespace, the way init stays in its own.
+
+    Zygote unshares its mount namespace after preload (UnmountStorageOnInit in AOSP's
+    com_android_internal_os_Zygote.cpp). If nothing else lives in the namespace zygote left,
+    the kernel tears it down and the mounts its open descriptors refer to become detached;
+    a descriptor on the bind-mounted /dev/urandom then reads as "/" and zygote's fd allowlist
+    refuses it before forking system_server. The helper holds no descriptors and dies with zygote.
+    """
+    import ctypes
+    import signal
+    if os.fork() == 0:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG: exit when zygote exits
+        os.closerange(0, 1024)
+        while True:
+            signal.pause()
+
+
 def launch_zygote(root, env_items):
     enter_root(root)
     sockets = Path("/dev/socket")
@@ -173,6 +192,7 @@ def launch_zygote(root, env_items):
                 os.close(number)
             except OSError:
                 pass
+    keep_namespace_alive()
     argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote"] + flags + ["--socket-name=zygote"]
     os.execve("/system/bin/app_process64", argv, env)
 
