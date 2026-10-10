@@ -39,6 +39,8 @@ def main():
                         help="with --real-servicemanager: run this image program (for example vendor_a:/bin/disk_info_service) as a server and call it with the image's service CLI")
     parser.add_argument('--fd-codes', metavar='FIRST-LAST',
                         help="with --serve-image: also try the service CLI with an FD argument for these transaction codes (1-32)")
+    parser.add_argument('--group-calls', metavar='NAME:CODE[,NAME:CODE]',
+                        help="with a comma-separated --serve-image group: after the descriptor call to every registered service, also run `service call NAME CODE` (no arguments)")
     parser.add_argument('--permissive', action='store_true',
                         help="with --real-servicemanager: mark only the temporary gbos_binder_probe_t domain permissive so one run logs every denial it would hit")
     args = parser.parse_args()
@@ -48,6 +50,10 @@ def main():
         parser.error('--fd-codes requires --serve-image')
     if args.fd_codes and not re.fullmatch(r'\d{1,2}-\d{1,2}', args.fd_codes):
         parser.error('--fd-codes must look like 1-8')
+    if args.group_calls and not (args.serve_image and ',' in args.serve_image):
+        parser.error('--group-calls requires a comma-separated --serve-image group')
+    if args.group_calls and not re.fullmatch(r'[A-Za-z0-9_./-]+:\d{1,4}(,[A-Za-z0-9_./-]+:\d{1,4})*', args.group_calls):
+        parser.error('--group-calls must look like NAME:CODE,NAME:CODE')
     if args.serve_image and not args.real_servicemanager:
         parser.error('--serve-image requires --real-servicemanager')
     if args.serve_image and (args.list_client or args.register_parcel):
@@ -208,6 +214,9 @@ def main():
             extraction = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(extraction)
             result['android_runtime'] = extraction.prepare(out, log, args.serve_image)
+            if args.group_calls:
+                (Path(result['android_runtime']['runtime']) / 'group-calls.txt').write_text(
+                    ''.join(item.replace(':', ' ') + '\n' for item in args.group_calls.split(',')))
             binary = Path(result['android_runtime']['runtime']) / 'binder-echo'
             result['limitations'] = ['Only the image servicemanager is started, for six seconds; with --list-client the image `service list` runs against it, with --register-parcel a native endpoint registers through the real addService and the image `service call` exercises it. No HAL.',
                                     'servicemanager.ready is a private immutable fixture, the property service is absent, and SELinux checks on service_manager are only observed as unknown-class allowed by deny_unknown.',
@@ -425,7 +434,7 @@ def main():
                 if args.fd_codes:
                     command.extend(args.fd_codes.split('-'))
         result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
-                                  else 'transfer' if args.object_fd else 'echo', 120 if args.fd_codes else 40)
+                                  else 'transfer' if args.object_fd else 'echo', 120 if args.fd_codes else 100 if args.serve_image and ',' in args.serve_image else 40)
         marker = ('SM_LAUNCHER=DONE' if sm_mode else 'ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
                   else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS')
         output = result['execution']['stdout']
@@ -512,6 +521,10 @@ def main():
                 log(f'GROUP MEMBER {index} {source}: stdout (without linker warnings):\n' + '\n'.join(
                     l for l in member['stdout'].splitlines() if 'linkerconfig' not in l)[:1500])
                 log('  last trace lines:\n  ' + '\n  '.join(l[:220] for l in member.get('last_trace_lines', [])))
+            group['calls'] = {}
+            for path in sorted(runtime_dir.glob('group-call-*.stdout'), key=lambda x: int(x.stem.split('-')[2])):
+                group['calls'][path.stem] = path.read_text(errors='replace')[:2048]
+                log(f'{path.stem}:\n' + group['calls'][path.stem])
             group['list_stdout'] = (runtime_dir / 'list-client.stdout').read_text(errors='replace') if (runtime_dir / 'list-client.stdout').is_file() else ''
             log('SERVICE LIST WITH THE GROUP RUNNING:\n' + group['list_stdout'])
             result['serve_group'] = group

@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
             "unsupported image program name");
     require((argc == 4 || with_client || with_register || with_serve) && sysconf(_SC_PAGESIZE) == 16384,
             "requires mount directory, runtime directory, root directory, optional --list-client and 16 KiB pages");
-    alarm(with_serve && last_code >= first_code ? 110 : 30);
+    alarm(with_serve && last_code >= first_code ? 110 : with_serve && strchr(served, ',') ? 90 : 30);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs");
     char control_path[4096], device_path[4096], trace[4096], target[4096];
     PATH_JOIN(control_path, argv[1], "binder-control"); PATH_JOIN(device_path, argv[1], "asahi-service-stub");
@@ -234,6 +234,33 @@ int main(int argc, char **argv) {
                 else printf("%s=still running\n", label);
             }
             report_status("SERVE_LIST_CLIENT", run_in_root(argv[3], argv[2], list_trace, list_out, "service", (const char *const[]){"list", NULL}, -1, 10));
+            /* Every registered service gets the interface-descriptor call; calls listed in group-calls.txt
+             * ("NAME CODE" per line, written by the runner) follow. Output: group-call-<n>.stdout/.trace. */
+            {
+                char text[8192] = "", plan[8192] = "", calls_path[4096];
+                FILE *f = fopen(list_out, "r");
+                if (f) { size_t got = fread(text, 1, sizeof(text) - 1, f); text[got] = 0; fclose(f); }
+                PATH_JOIN(calls_path, argv[2], "group-calls.txt");
+                size_t used = 0; int n = 0;
+                for (char *save = NULL, *line = strtok_r(text, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+                    char *tab = strchr(line, '\t'), *colon = tab ? strchr(tab, ':') : NULL;
+                    if (!tab || !colon || colon - tab > 200 || strstr(line, "android.os.IServiceManager")) continue;
+                    int added = snprintf(plan + used, sizeof(plan) - used, "%.*s 1598968902\n", (int)(colon - tab - 1), tab + 1);
+                    if (added > 0 && used + added < sizeof(plan)) used += added;
+                }
+                f = fopen(calls_path, "r");
+                if (f) { size_t got = fread(plan + used, 1, sizeof(plan) - used - 1, f); plan[used + got] = 0; fclose(f); }
+                for (char *save = NULL, *line = strtok_r(plan, "\n", &save); line && n < 32; line = strtok_r(NULL, "\n", &save), n++) {
+                    char name[256], code[32], file_name[64], trace_path[4096], out_path[4096], label[400];
+                    if (sscanf(line, "%255s %31s", name, code) != 2 || strspn(code, "0123456789") != strlen(code) ||
+                        strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-/") != strlen(name)) continue;
+                    snprintf(file_name, sizeof(file_name), "group-call-%d.trace", n); PATH_JOIN(trace_path, argv[2], file_name);
+                    snprintf(file_name, sizeof(file_name), "group-call-%d.stdout", n); PATH_JOIN(out_path, argv[2], file_name);
+                    snprintf(label, sizeof(label), "GROUP_CALL_%d %s %s", n, name, code);
+                    report_status(label, run_in_root(argv[3], argv[2], trace_path, out_path, "service",
+                        (const char *const[]){"call", name, code, NULL}, -1, 10));
+                }
+            }
             for (int i = 0; i < count; i++) kill(-members[i], SIGTERM);
             usleep(1500000);
             for (int i = 0; i < count; i++) { int ms; if (kill(-members[i], SIGKILL) == 0) waitpid(members[i], &ms, 0); }
