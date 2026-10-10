@@ -65,21 +65,34 @@ when `deny_unknown` is 0, which would let the image's servicemanager pass its
 service checks without Android labels. Stage 2 must confirm this against the
 image's own libselinux before any run.
 
-### One command: read the image's libselinux check (stage 2, read-only)
+### Stage 2 partial result: image libselinux file paths
 
-**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+Reported by the user from `work/asahi/servicemanager-inspect-4e70qfl1`
+(`system_a:/system/lib64/libselinux.so`, ARM64/16 KiB, 135528 bytes;
+`DT_NEEDED`: libpcre2, liblog, libpackagelistparser, libc). Static strings only.
+It references these context files: `/system/etc/selinux/plat_service_contexts`,
+`plat_hwservice_contexts`, `plat_tee_service_contexts`, `plat_file_contexts`,
+`plat_seapp_contexts`, `plat_keystore2_key_contexts`; the matching
+`/vendor/etc/selinux/vendor_*`, `/vendor/etc/selinux/vndservice_contexts`,
+`/odm/etc/selinux/odm_*`, `/product/etc/selinux/product_*` and
+`/system_ext/etc/selinux/system_ext_*` files. A servicemanager run would
+therefore read service-contexts files from those fixed paths.
 
-Scope: creates one new `work/asahi/servicemanager-inspect-*` directory with a
-copy of `/system/lib64/libselinux.so` (size-limited), a strings-hints file and
-`summary.json`; the image is only read, nothing is executed. Reversal: delete the
-newly printed result directory. The script gained a `--path` option (still
-read-only).
+The `nm` lookup printed an empty `selinux_check_access=` because exported
+names carry a version suffix (`@@...`); the lookup, not the library, failed.
+Whether `selinux_check_access` returns success for an unknown class is still
+unconfirmed.
+
+### One command: disassemble selinux_check_access (stage 2, read-only)
+
+No storage is modified; it reads the file already copied above. On the M1:
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/inspect-servicemanager.py --path /system/lib64/libselinux.so | tee /tmp/libselinux-inspect.txt | grep -E '^(Results|File|machine|DT_NEEDED)|STR .*(service_contexts|/system/|/vendor/|unknown|deny)' ; d=$(grep '^Results:' /tmp/libselinux-inspect.txt | cut -d' ' -f2); a=$(nm -D --defined-only "$d/libselinux.so" | awk '$3=="selinux_check_access"{print $1}'); echo "selinux_check_access=$a"; [ -n "$a" ] && objdump -d --no-show-raw-insn --start-address=0x$a --stop-address=$(printf '0x%x' $((0x$a + 0x180))) "$d/libselinux.so" | head -150
+cd ~/Gbosm1/work/asahi/servicemanager-inspect-4e70qfl1 && a=$(nm -D --defined-only libselinux.so | awk '$3 ~ /^selinux_check_access/ {print $1; exit}'); echo "selinux_check_access=$a"; [ -n "$a" ] && objdump -d --no-show-raw-insn --start-address=0x$a --stop-address=$(printf '0x%x' $((0x$a + 0x200))) libselinux.so | head -180
 ```
 
-Say **get logs** with the output. If `selinux_check_access=` is empty, say so.
+Say **get logs** with the output. If the address is still empty, send
+`nm -D --defined-only libselinux.so | grep -i check` instead.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
