@@ -1988,7 +1988,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a complete; stage 3b is next
+## Graphics: stages 0, 1, 2, 3a and 3b complete; stage 3c is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2026,35 +2026,62 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3b, linear buffers without Mesa's GBM
+### Next: Graphics stage 3c, can the display take GPU-node buffers?
 
-Stage 3a (below) found no Asahi or Apple support in minigbm, but it does have a
-plain "dumb buffer" backend selected by DRM driver name. Whether a dumb buffer
-from the display driver (`apple`), or a buffer from a dma-heap, can be used by
-Honeykrisp is untested. This step allocates 256x256 ARGB8888 linear buffers
-those ways, imports each into Honeykrisp as a linear image, and checks both
-directions: CPU write then GPU read, and GPU clear then CPU read through an
-mmap of the dma-buf. It also prints the node permissions and the two minigbm
-source excerpts still needed (read from the stage 3a clone, no network).
+Stage 3b (below) showed linear dumb buffers work with Honeykrisp from either
+card node. For Android's allocator the open question is scanout: the
+compositor's buffers must be accepted by the display driver. This step
+allocates dumb buffers on the `asahi` node (256x256 and the panel's 2560x1600),
+exports them as dma-bufs, imports them into the `apple` display driver and
+tries `ADDFB2` (wrapping in a framebuffer; nothing is shown), then repeats
+with a buffer allocated on `apple` itself as the baseline. It also tests
+whether the GPU's render node can create dumb buffers at all, which decides
+whether an unmodified minigbm (it tries `renderD*` first) could use an
+`asahi` dumb backend.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/linear-dmabuf-*` directory with the probe binary
-and `report.txt`. Allocates a few 256x256 buffers for the run only (dumb
-buffers on the `apple` and `asahi` card nodes, one per readable dma-heap).
-No modeset and no DRM master are used, so GNOME is unaffected. Delete the
-directory to reverse. It uses the same `vulkan-loader-devel` and
-`libdrm-devel` packages as stage 1.
+Creates one new `work/asahi/dumb-crossimport-*` directory with the probe binary
+and `report.txt`. Allocates dumb buffers (up to 16 MB each) for the run only
+and removes the test framebuffers it creates. No modeset, no commit, no DRM
+master, no Vulkan; GNOME is unaffected. Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/run-linear-dmabuf.sh
+bash asahi/run-dumb-crossimport.sh
 ```
 
-Send the printed `report.txt`. Each case reports its own step (`dumb_create`,
-`prime_export`, `vulkan_import`, `cpu_to_gpu`, `gpu_to_cpu`); a refusal such
-as a permission error on a node is a result, not something to work around.
-The probe compiled here but has not run; Honeykrisp is only on your machine.
+Send the printed `report.txt`. Any failure is a result. The probe compiled
+here but has not run.
+
+### Result: Graphics stage 3b, linear buffers without GBM (passed for dumb buffers)
+
+Operationally tested, reported by the user from
+`work/asahi/linear-dmabuf-x75HUu9W`:
+
+- Dumb buffer on the `apple` display node (`card3`): created (pitch 1024,
+  262144 bytes), exported as a dma-buf, imported into Honeykrisp as a linear
+  image. CPU write then GPU read passed (65536/65536) and GPU clear then CPU
+  read through an mmap of the dma-buf with `DMA_BUF_IOCTL_SYNC` passed
+  (65536/65536).
+- Dumb buffer on the `asahi` GPU node (`card1`): identical results, all passing.
+- dma-heap: not tested. `/dev/dma_heap/{system,reserved,default_cma_region}`
+  are `root:video` mode 0660 and the user is not in `video` (open errno 13), so
+  allocation never ran. Dumb buffers make it unnecessary for now.
+- Permissions on this boot: `card1` and `card3` have an ACL for the logged-in
+  user (the `+`), `card2` does not (open errno 13, driver unknown),
+  `renderD128` is world read/write. An Android allocator reaching the card
+  nodes would need equivalent access.
+- minigbm facts from the printed source: its dumb backend offers linear
+  ARGB/XRGB/ABGR/XBGR8888, BGR888, RGB565 (render and scanout) and
+  R8/NV12/NV21/YVU420 (texture-only), and `dumb_bo_create_with_modifiers`
+  accepts only `DRM_FORMAT_MOD_LINEAR`. `init_try_nodes()` tries
+  `renderD128...` first with plain `open()` and `drv_create()`, then `card*`
+  nodes, using the first whose driver name matches a backend.
+
+So linear dumb buffers from either card node round-trip with Honeykrisp in both
+directions. Not covered: render-node dumb allocation, scanout import, tiled
+buffers, other processes, Android.
 
 ### Result: Graphics stage 3a, minigbm source (read, not built)
 
