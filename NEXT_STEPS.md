@@ -2274,9 +2274,16 @@ lines, and I will fix them from that.
 
 Creates one new `work/asahi/aidl-build-*` directory: object files, the built
 `aidl` binary, the generated code and `report.txt`. The stage 3i sources are
-only read. Delete the directory to reverse. Nothing is installed or downloaded.
+only read. Delete the directory to reverse. Nothing is downloaded.
+
+First run (reported): every unit failed on `fmt/chrono.h` not found (libbase
+needs the fmt headers), `android/log.h` was not on the include path (fixed
+from the stage 3i `liblog` checkout), and `libbase/properties.cpp` does not
+build with this libstdc++ (dropped; `aidl` should not need it). Rerun after one
+package install (the only system change; reverse with `sudo dnf remove fmt-devel`):
 
 ```bash
+sudo dnf install fmt-devel
 cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-aidl-host.sh
 ```

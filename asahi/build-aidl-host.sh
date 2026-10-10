@@ -6,6 +6,7 @@ set -uo pipefail
 [[ $(uname -s) == Linux ]] || { echo 'Run on Fedora Asahi Linux.' >&2; exit 1; }
 [[ $(id -u) != 0 ]] || { echo 'Run as your ordinary user, without sudo.' >&2; exit 1; }
 for c in clang++ bison flex python3; do command -v $c >/dev/null || { echo "Missing $c." >&2; exit 1; }; done
+[[ -f /usr/include/fmt/chrono.h ]] || { echo 'Missing fmt headers (libbase needs them). Install with: sudo dnf install fmt-devel' >&2; exit 1; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 W=$ROOT/work/asahi
 SRC=$(ls -dt "$W"/aosp-gralloc-src-* 2>/dev/null | head -1)
@@ -41,8 +42,8 @@ done
 
 echo '== Compile (clang++ -std=gnu++20, parallel)'
 AIDL_SRCS="aidl_checkapi aidl_const_expressions aidl_dumpapi aidl_language aidl_to_common aidl_to_cpp_common aidl_to_cpp aidl_to_java aidl_to_ndk aidl_to_rust aidl_typenames aidl ast_java check_valid code_writer comments diagnostics generate_aidl_mappings generate_cpp generate_cpp_analyzer generate_java_binder generate_java generate_ndk generate_rust import_resolver io_delegate location logging options parser permission preprocess main"
-BASE_SRCS="abi_compatibility chrono_utils cmsg file hex logging mapped_file parsebool parsenetaddress posix_strerror_r process properties result stringprintf strings threads errors_unix"
-FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$A -I$A/include -I$A/build -I$OUT/gen-parser -I$B/include -I$OUT/stubs"
+BASE_SRCS="abi_compatibility chrono_utils cmsg file hex logging mapped_file parsebool parsenetaddress posix_strerror_r process result stringprintf strings threads errors_unix"
+FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$A -I$A/include -I$A/build -I$OUT/gen-parser -I$B/include -I$SRC/system_logging/liblog/include -I$OUT/stubs"
 {
     for s in $AIDL_SRCS; do echo "$A/$s.cpp aidl_$s"; done
     for s in aidl_language_y aidl_language_l; do echo "$OUT/gen-parser/$s.cpp gen_$s"; done
