@@ -46,8 +46,7 @@ Reported by the user from `work/asahi/android-parcel-probe-edolfdu5`
 codes 0 and 0, `error` None; the client printed `Result: Parcel( 47504231
 00004000)`. Build, device-context, libraries, existing-modules, policy-install,
 probe-label, parcel-call, restore-context and policy-remove all exit 0; the
-AVC query returned `<no matches>` (exit 1 is grep's no-match). Not run again
-at the time of writing: no manual cleanup is needed.
+AVC query returned `<no matches>` (exit 1 is grep's no-match). No manual cleanup is needed.
 
 ## One command: Android returned object and outgoing FD Parcel
 
