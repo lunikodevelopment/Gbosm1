@@ -4,17 +4,43 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: Bionic Toybox execution and native private Binder echo both passed
-on Fedora Asahi ARM64/16 KiB. The dedicated Binder server domain ran with SELinux
-enforcing; its temporary module was removed and the new executable label restored.
+Current status: Bionic Toybox execution, native private Binder echo and Android
+libbinder's empty-list request/reply all passed on Fedora Asahi ARM64/16 KiB.
+The dedicated Binder server domain ran with SELinux enforcing; its temporary
+module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the libbinder probe with its private readiness property fixture.
-The retrieved trace identifies the wait for `servicemanager.ready` before Binder
-traffic. The fixture is implemented; target execution of this revision remains
-pending. Descendant cleanup and temporary policy/label cleanup succeeded in the
-latest traced attempt.
+Next action: retain the completed result below; this probe does not need to be
+rerun. The next integration milestone is Binder object/FD transfer before a
+real Android servicemanager or HAL workload. No new execution command is issued
+by this log review.
 
-## One command: libbinder with private stub readiness
+## Completed Android libbinder milestone
+
+Retrieved directly from the target HTTP server:
+`/home/gbos_user/Gbosm1/work/asahi/libbinder-probe-xcsf6yfs`.
+
+| Operation | Result | Scope |
+|---|---|---|
+| Native build and overall execution | Both exit 0; summary exit_status 0 | ARM64 with 16384-byte pages and private Binder protocol 8. |
+| Bionic readiness file | Open and 131072-byte MAP_SHARED read mapping succeeded | Image Bionic accepted the private single-property fixture. |
+| Android Binder device | `/dev/binder` opened; version, buffer map and BINDER_WRITE_READ succeeded | Unmodified image client used the private device. |
+| Metadata request | Code 1599098439 (PING), bytes 0 | Stub handled the client's ping. |
+| List request | Code 6, bytes 76, flags 0x10; UTF-16 interface token and priority 15 verified | Android libbinder marshalled the expected listServices request. |
+| Android result | `Found 0 services:`; Android exit_group(0) | Client accepted the stub's empty-list reply. |
+| Probe success markers | LIBBINDER_STUB_REPLY=PASS and LIBBINDER_LIST=PASS | Client and native server both completed. |
+| Executable label restoration and policy removal | Both exit 0; last module priority removed | Temporary policy/label cleanup completed. |
+| Recent AVC query | Exit 1, `<no matches>` | No matches in the queried recent window; not a historical audit. |
+
+The readiness wait is resolved for this probe. Missing generated linker
+configuration and denied optional trace_marker opens were nonfatal for this
+completed exchange. Preserve the reports and current enforcement settings.
+This proves Android libbinder IPC against the minimal native empty-list stub.
+Full Android init/property service, split property contexts, real servicemanager,
+Binder object/FD transfer, HALs, Android boot and graphics remain untested.
+
+## Completed command: libbinder with private stub readiness
+
+Retained as provenance. The run above passed; do not repeat it for this milestone.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -83,10 +109,9 @@ If strace was newly installed solely for this probe, removing that package with
 `sudo dnf remove strace` reverses its package installation; inspect the removal
 transaction before accepting it. Source versions remain recoverable in Git.
 
-After completion, say **get logs**. I will retrieve the summary, report and
-client trace from the HTTP directory listing. A diagnostic run may still stop;
-passing libbinder IPC will be claimed only when the verified stub reply, Android
-client output, exit status and cleanup results establish it.
+The summary, report and full client trace have been retrieved. Their verified
+stub reply, Android output, exit status and cleanup results establish the
+completed milestone above.
 
 The expected evidence is `STUB_READY_PROPERTY=CREATED`, a verified
 `ANDROID_PARCEL` list request, `LIBBINDER_STUB_REPLY=PASS`, Android's
@@ -101,8 +126,8 @@ Implementation reference: Bionic revision
 `prop_area::map_fd_ro`, `prop_trie_node` and `prop_info`. The area has magic
 `0x504f5250`, version `0xfc6ed0ab`, a 128-byte header, relative trie offsets,
 and a clean value serial. Its owner/group are verified as root inside the user
-namespace and its final mode is 0444. Compatibility with the extracted Android
-17 Bionic is established only by the next target run.
+namespace and its final mode is 0444. The completed target run confirms that
+the extracted Android 17 Bionic accepts this fixture for the scoped exchange.
 
 ## Retrieved traced libbinder attempt: readiness wait
 
@@ -154,7 +179,7 @@ cleanup identity in the summary.
 
 ## Previous command: Android libbinder list request
 
-Retained as provenance. Use the corrected tracing command above for the next run.
+Retained as provenance; the corrected probe has now passed as recorded above.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -410,7 +435,7 @@ User-supplied Fedora output on 10 October 2026 establishes:
 |---|---|---|
 | Running kernel | `7.1.6-400.asahi.fc44.aarch64+16k` | Collector output; installed kernel headers are a separate package. |
 | Runtime page size | 16384 bytes | Confirmed by collector and GPU probe. |
-| Binder IPC / binderfs | Native private Binder echo passed with protocol 8 on 16 KiB pages | Dedicated SELinux server domain; request/reply verified, temporary module removed and executable label restored. Android libbinder remains untested. |
+| Binder IPC / binderfs | Native echo and Android libbinder empty-list exchange passed with protocol 8 on 16 KiB pages | Dedicated SELinux server domain; verified request/reply, temporary module removed and executable label restored. Real Android servicemanager and object/FD transfer remain untested. |
 | DMA-BUF / DMA heaps | Configured `y`; system heap node present | Allocation and sharing remain untested. |
 | GPU kernel driver | Asahi module loaded; `renderD128` and `card2` use Asahi | Collector evidence. |
 | Internal display | `apple-drm`, connected eDP, 2560×1600 mode | Enumeration only; Android composition remains untested. |
@@ -445,8 +470,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Run the probe with the private readiness fixture, retrieve its client trace
-   and cleanup results, and establish the Android list request/reply milestone.
+1. Extend the completed Binder milestone to verified object/FD transfer before
+   attempting real Android servicemanager or HAL integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
