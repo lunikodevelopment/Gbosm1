@@ -13,8 +13,10 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none for you right now. The ART scan, apex inspection and apex
-payload listing are done (results below); stage 9a waits on a go-ahead.
+Next action: the Binder/ART track has nothing for you right now (the ART scan,
+apex inspection and apex payload listing are done, results below; stage 9a
+waits on a go-ahead). The separate graphics track has its own pending step,
+"Graphics stage 3b" further down.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
