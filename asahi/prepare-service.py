@@ -10,16 +10,30 @@ import tempfile
 
 
 def prepare(out, log):
-    summaries = sorted(Path('work/asahi').glob('bionic-probe-*/summary.json'),
-                       key=lambda p: p.stat().st_mtime, reverse=True)
+    prepared = None
     previous = None
-    for path in summaries:
-        data = json.loads(path.read_text())
-        if data.get('exit_status') == 0 and data.get('execution', {}).get('returncode') == 0:
-            previous = path
+    # A failed execution can still have a complete, reusable extracted runtime.
+    for path in sorted(Path('work/asahi').glob('libbinder-probe-*/summary.json'),
+                       key=lambda p: p.stat().st_mtime, reverse=True):
+        record = json.loads(path.read_text()).get('android_runtime', {})
+        if not record.get('runtime') or not record.get('elf'):
+            continue
+        candidate = Path(record['runtime']).resolve()
+        if candidate.parent != path.parent.resolve() or candidate.name != 'android-runtime':
+            continue
+        if (candidate / 'service').is_file() and (candidate / 'linker64').is_file():
+            prepared, previous, data = candidate, path, record
             break
     if previous is None:
-        raise ValueError('no completed Bionic runtime found')
+        summaries = sorted(Path('work/asahi').glob('bionic-probe-*/summary.json'),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in summaries:
+            data = json.loads(path.read_text())
+            if data.get('exit_status') == 0 and data.get('execution', {}).get('returncode') == 0:
+                previous = path
+                break
+    if previous is None:
+        raise ValueError('no completed Bionic runtime or prepared service runtime found')
     spec = importlib.util.spec_from_file_location('recovery', Path(__file__).with_name('audit-recovery.py'))
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
@@ -34,7 +48,8 @@ def prepare(out, log):
     libs = runtime / 'lib64'
     libs.mkdir()
     result = {'previous': str(previous.resolve()), 'image': str(image), 'elf': []}
-    old = previous.parent / 'runtime'
+    old = prepared if prepared is not None else previous.parent / 'runtime'
+    result['reused_prepared_runtime'] = prepared is not None
 
     def inspect(path, origin):
         if path.stat().st_size > 64 << 20:
@@ -100,7 +115,13 @@ def prepare(out, log):
     shutil.copyfile(old / 'linker64', linker)
     pending = set(inspect(linker, 'completed Bionic runtime:linker64'))
     service = runtime / 'service'
-    extract('/system/bin/service', service)
+    if prepared is not None:
+        if (old / 'service').stat().st_size > 64 << 20:
+            raise ValueError('prepared service client exceeds limit')
+        shutil.copyfile(old / 'service', service)
+        log('Reusing the already prepared service runtime; execution is not assumed successful.')
+    else:
+        extract('/system/bin/service', service)
     pending.update(inspect(service, 'system_a:/system/bin/service'))
     done = {'ld-android.so'}
     # Reuse only inspected dependencies, preserving the previously extracted Bionic libc.
