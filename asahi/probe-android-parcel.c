@@ -18,7 +18,7 @@ static const binder_uintptr_t parcel_object = 0x47424f530101ULL;
 static const binder_uintptr_t parcel_cookie = 0x47424f530102ULL;
 static const char parcel_descriptor[] = "org.gbos.ParcelProbe";
 static unsigned char parcel_byte(size_t i) { return (unsigned char)((i * 37u + 11u) & 255u); }
-static void parcel_setup_input(void) {
+static int parcel_setup_input(void) {
     /* Called after the server fork; no source descriptor is inherited there. */
     int fd = memfd_create("gbos-android-parcel", MFD_CLOEXEC | MFD_ALLOW_SEALING);
     if (fd < 0) fail("create Android Parcel memfd");
@@ -30,14 +30,17 @@ static void parcel_setup_input(void) {
     require(write(fd, data, sizeof(data)) == (ssize_t)sizeof(data), "write Android Parcel input failed");
     if (fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_WRITE))
         fail("seal Android Parcel input");
-    int placeholder = open("/dev/gbos-parcel-input", O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0400);
-    if (placeholder < 0) fail("create private Parcel input placeholder");
-    close(placeholder);
     char path[64]; snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
-    if (mount(path, "/dev/gbos-parcel-input", NULL, MS_BIND, NULL)) fail("bind private sealed Parcel input");
-    /* CLI opens this path O_RDONLY and serializes its descriptor through Parcel. */
+    /* Anonymous memfd mounts cannot be bind-mounted on this target (EINVAL).
+     * Reopen read-only, then give only the Android client this file as stdin.
+     * strace and linker exec preserve stdin; service opens /proc/self/fd/0
+     * O_RDONLY and writes that new descriptor through its own Parcel API. */
+    int input = open(path, O_RDONLY | O_CLOEXEC);
+    if (input < 0) fail("reopen sealed Parcel input read-only");
+    require(input > STDERR_FILENO, "Parcel input overlaps standard descriptors");
     if (close(fd)) fail("close launcher Parcel source FD");
-    puts("PARCEL_INPUT=READY: sealed 16384-byte fixture exposed only in private /dev.");
+    puts("PARCEL_INPUT=READY: sealed 16384-byte read-only fixture prepared for client stdin; server has no inherited copy.");
+    return input;
 }
 static void parcel_range(struct connection c, binder_uintptr_t address, size_t bytes) {
     uintptr_t start = (uintptr_t)c.map;
