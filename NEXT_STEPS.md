@@ -13,9 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none for you right now. Stage 6d and the permissive run are
-done (results below); the grouped HAL launcher is being built and will be
-announced with its command.
+Next action: run the one command under "Run now: stage 7a" below, then paste
+its output. Stage 6d and the permissive run are done (results below).
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -405,6 +404,38 @@ an Android-built Binder server registering with the real servicemanager (the
 image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
+
+## Run now: stage 7a, start six image HAL programs together and list who registers
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as stages 5 and 6: one new
+`work/asahi/real-servicemanager-*` result directory, the temporary
+`gbos_binder_probe` SELinux module (with `--permissive`, only for
+`gbos_binder_probe_t`) and one label on the new launcher, restored and removed by
+the runner (it refuses a preexisting module; SELinux stays enforcing), and
+private mounts that end with the namespace. Nothing else is written; no
+partitioning, formatting, flashing or boot change.
+
+What it does: starts the image servicemanager, then these image programs one
+after another (0.5 s apart, unconfined, in the private root, each under strace):
+`lights`, `dumpstate`, `power.stats`, `oemlock`, `health` and
+`sensorscalibrate`. After about 3.5 seconds it runs the image's `service list` and
+stops them all. This is not Android init: no property service, no mounts, no
+`/sys/fs/selinux` write. The programs only see the private root and the private
+binder device. Expect some to exit early (missing properties, devices or
+sockets); that is the result being collected. The runner prints each program's
+exit state, its output and the last trace lines, and the service list.
+
+If extraction fails (a path differs in the image), the run stops before any
+module is installed and nothing is changed.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --permissive --serve-image vendor_a:/bin/hw/android.hardware.lights-service.android-desktop,vendor_a:/bin/hw/android.hardware.dumpstate-service-desktop,vendor_a:/bin/hw/android.hardware.power.stats-service.desktop,vendor_a:/bin/hw/vendor.google.desktop.oemlock-service,vendor_a:/bin/hw/android.hardware.health-service.android-desktop,vendor_a:/bin/hw/vendor.qti.hardware.sensorscalibrate-service
+```
+
+Paste the terminal output from `servicemanager-run` to the end. Wait for the
+prompt to return first (about 40 seconds).
 
 ## Results: stage 6d with the permissive domain (`real-servicemanager-ywc97a33`)
 

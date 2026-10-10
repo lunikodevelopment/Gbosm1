@@ -115,14 +115,19 @@ def prepare(out, log, server=None):
         pending.update(inspect(service, 'system_a:/system/bin/service'))
     service.chmod(0o700)
     if server:
-        part, _, path = server.partition(':')
-        if part not in offsets or not re.fullmatch(r'/[A-Za-z0-9_./-]+', path):
-            raise ValueError('unsupported image program: ' + server)
-        served = runtime / Path(path).name
-        extract(part, path, served)
-        served.chmod(0o700)
-        pending.update(inspect(served, server))
-        result['served_program'] = {'source': server, 'runtime_name': served.name}
+        result['served_programs'] = []
+        for item in server.split(','):
+            part, _, path = item.partition(':')
+            if part not in offsets or not re.fullmatch(r'/[A-Za-z0-9_./-]+', path):
+                raise ValueError('unsupported image program: ' + item)
+            served = runtime / Path(path).name
+            if served.exists():
+                raise ValueError('two served programs share the file name ' + served.name)
+            extract(part, path, served)
+            served.chmod(0o700)
+            pending.update(inspect(served, item))
+            result['served_programs'].append({'source': item, 'runtime_name': served.name})
+        result['served_program'] = result['served_programs'][0]
     done = {'ld-android.so'}
     while pending:
         name = sorted(pending)[0]
@@ -141,8 +146,13 @@ def prepare(out, log, server=None):
                 shutil.copyfile(candidate, destination)
                 origin = 'earlier extracted runtime:' + name
             else:
-                extract('system_a', '/system/lib64/' + name, destination)
-                origin = 'system_a:/system/lib64/' + name
+                try:
+                    extract('system_a', '/system/lib64/' + name, destination)
+                    origin = 'system_a:/system/lib64/' + name
+                except ValueError:
+                    destination.unlink(missing_ok=True)
+                    extract('vendor_a', '/lib64/' + name, destination)
+                    origin = 'vendor_a:/lib64/' + name
             pending.update(inspect(destination, origin))
         except ValueError as error:
             destination.unlink(missing_ok=True)

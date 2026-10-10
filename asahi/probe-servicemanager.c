@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
     long first_code = 0, last_code = -1;
     if (with_serve && argc == 8) { first_code = strtol(argv[6], NULL, 10); last_code = strtol(argv[7], NULL, 10);
         require(first_code >= 1 && last_code >= first_code && last_code <= 32, "unsupported transaction code range"); }
-    require(!with_serve || (strlen(served) < 128 && strspn(served, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == strlen(served)),
+    require(!with_serve || (strlen(served) < 1024 && strspn(served, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-,") == strlen(served)),
             "unsupported image program name");
     require((argc == 4 || with_client || with_register || with_serve) && sysconf(_SC_PAGESIZE) == 16384,
             "requires mount directory, runtime directory, root directory, optional --list-client and 16 KiB pages");
@@ -197,7 +197,48 @@ int main(int argc, char **argv) {
             else printf("REGISTER_ENDPOINT=%s %d\n", WIFEXITED(estatus) ? "exit status" : "signal",
                         WIFEXITED(estatus) ? WEXITSTATUS(estatus) : WTERMSIG(estatus));
         }
-        if (!exited && with_serve) {
+        if (!exited && with_serve && strchr(served, ',')) {
+            /* Group start (not Android init): each listed image program is started unconfined in the
+             * private root, in the given order, then the image's `service list` shows who registered. */
+            char names[1024], list_trace[4096], list_out[4096], libraries[4096], library_env[4200], linker[4096];
+            snprintf(names, sizeof(names), "%s", served);
+            PATH_JOIN(list_trace, argv[2], "list-client.trace"); PATH_JOIN(list_out, argv[2], "list-client.stdout");
+            PATH_JOIN(libraries, argv[2], "lib64"); PATH_JOIN(linker, argv[2], "linker64");
+            require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) < (int)sizeof(library_env),
+                    "library environment too long");
+            pid_t members[16]; char *member_names[16]; int count = 0;
+            for (char *save = NULL, *item = strtok_r(names, ",", &save); item && count < 16; item = strtok_r(NULL, ",", &save)) {
+                char member_trace[4096], member_out[4096], member_path[4096], file_name[200];
+                snprintf(file_name, sizeof(file_name), "group-%d.trace", count); PATH_JOIN(member_trace, argv[2], file_name);
+                snprintf(file_name, sizeof(file_name), "group-%d.stdout", count); PATH_JOIN(member_out, argv[2], file_name);
+                PATH_JOIN(member_path, argv[2], item);
+                pid_t mpid = fork(); if (mpid < 0) fail("fork group member");
+                if (mpid == 0) {
+                    if (setpgid(0, 0)) fail("own member process group");
+                    int out = open(member_out, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+                    if (out < 0 || dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0) fail("redirect member output");
+                    if (chroot(argv[3]) || chdir("/")) fail("enter private root for member");
+                    execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", member_trace, "-E", library_env,
+                          linker, member_path, (char *)NULL);
+                    fail("execute traced member");
+                }
+                members[count] = mpid; member_names[count] = item; count++;
+                printf("GROUP_STARTED_%d=%s\n", count - 1, item);
+                usleep(500000);
+            }
+            usleep(3000000);
+            for (int i = 0; i < count; i++) {
+                int mstatus = 0; char label[300];
+                snprintf(label, sizeof(label), "GROUP_MEMBER_%d_%s", i, member_names[i]);
+                if (waitpid(members[i], &mstatus, WNOHANG) == members[i]) report_status(label, mstatus);
+                else printf("%s=still running\n", label);
+            }
+            report_status("SERVE_LIST_CLIENT", run_in_root(argv[3], argv[2], list_trace, list_out, "service", (const char *const[]){"list", NULL}, -1, 10));
+            for (int i = 0; i < count; i++) kill(-members[i], SIGTERM);
+            usleep(1500000);
+            for (int i = 0; i < count; i++) { int ms; if (kill(-members[i], SIGKILL) == 0) waitpid(members[i], &ms, 0); }
+            puts("IMAGE_SERVER_STOPPED");
+        } else if (!exited && with_serve) {
             /* The image's own program serves; the image's `service` CLI is the client. */
             char server_trace[4096], server_out[4096], list_trace[4096], list_out[4096], call_trace[4096], call_out[4096];
             PATH_JOIN(server_trace, argv[2], "server.trace"); PATH_JOIN(server_out, argv[2], "server.stdout");

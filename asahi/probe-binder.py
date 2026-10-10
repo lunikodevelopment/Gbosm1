@@ -420,7 +420,8 @@ def main():
             if args.register_parcel:
                 command.append('--register-parcel')
             if args.serve_image:
-                command.extend(['--serve-image', result['android_runtime']['served_program']['runtime_name']])
+                command.extend(['--serve-image', ','.join(item['runtime_name'] for item in result['android_runtime']['served_programs'])
+                                if len(result['android_runtime']['served_programs']) > 1 else result['android_runtime']['served_program']['runtime_name']])
                 if args.fd_codes:
                     command.extend(args.fd_codes.split('-'))
         result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
@@ -494,7 +495,31 @@ def main():
             log('REGISTER_RECEIPT_VERIFIED=' + str(receipt))
             if missing or not receipt:
                 raise RuntimeError('registered-endpoint markers or printed receipt missing: ' + ', '.join(missing))
-        if args.serve_image:
+        if args.serve_image and ',' in args.serve_image:
+            runtime_dir = Path(result['android_runtime']['runtime'])
+            group = {'programs': args.serve_image.split(','), 'members': {}}
+            for index, source in enumerate(group['programs']):
+                trace_path = runtime_dir / f'group-{index}.trace'
+                stdout_path = runtime_dir / f'group-{index}.stdout'
+                member = {'source': source,
+                          'stdout': stdout_path.read_text(errors='replace')[:4096] if stdout_path.is_file() else ''}
+                if trace_path.is_file():
+                    with trace_path.open(errors='replace') as stream:
+                        lines = stream.read().splitlines()
+                    member['addService_like_binder_writes'] = sum('BINDER_WRITE_READ' in l for l in lines)
+                    member['last_trace_lines'] = lines[-6:]
+                group['members'][index] = member
+                log(f'GROUP MEMBER {index} {source}: stdout (without linker warnings):\n' + '\n'.join(
+                    l for l in member['stdout'].splitlines() if 'linkerconfig' not in l)[:1500])
+                log('  last trace lines:\n  ' + '\n  '.join(l[:220] for l in member.get('last_trace_lines', [])))
+            group['list_stdout'] = (runtime_dir / 'list-client.stdout').read_text(errors='replace') if (runtime_dir / 'list-client.stdout').is_file() else ''
+            log('SERVICE LIST WITH THE GROUP RUNNING:\n' + group['list_stdout'])
+            result['serve_group'] = group
+            missing = [m for m in ('SERVE_LIST_CLIENT=exit status 0', 'IMAGE_SERVER_STOPPED') if m not in output]
+            result['missing_markers'] = missing
+            if missing:
+                raise RuntimeError('group markers missing: ' + ', '.join(missing))
+        elif args.serve_image:
             runtime_dir = Path(result['android_runtime']['runtime'])
             def read_out(name):
                 path = runtime_dir / name
