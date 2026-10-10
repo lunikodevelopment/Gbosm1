@@ -11,8 +11,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the stage 4 fixture-directory listing below. Retain all earlier
-results; no completed probe needs rerunning.
+Next action: run the remaining stage 4 fixture-directory listings below. Retain
+all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
 
@@ -124,25 +124,36 @@ Stage 3 decision: continue with option (a) (host behavior permits the check, no
 policy module needed for it), to be confirmed by the first run. Stop and report
 if a run shows a denial.
 
-### One command: list the fixture directories (stage 4, read-only)
+### Stage 4 partial result: fixture directory listings
+
+Reported by the user (`work/asahi/servicemanager-inspect-8_p893ig`, `-p8kux7d8`,
+`-1_nwe186`):
+
+- `system_a:/system/etc/vintf`: `manifest.xml`, a `manifest` directory,
+  `compatibility_matrix.7.xml`, `.8.xml`, `.202404.xml`, `.202504.xml`,
+  `.202604.xml` and `.device.xml`.
+- `system_a:/system/etc/selinux`: `plat_service_contexts` (the file the
+  servicemanager's service-name lookup needs), `plat_hwservice_contexts`,
+  `plat_tee_service_contexts`, `plat_property_contexts`, `plat_file_contexts`,
+  `plat_seapp_contexts`, `plat_keystore2_key_contexts`, `plat_sepolicy.cil`,
+  mapping files and others.
+- `vendor_a:/vendor/etc/vintf` produced no listing, most likely because the
+  partition's root is the vendor tree itself, so the path inside it is
+  `/etc/vintf`, not `/vendor/etc/vintf`. Not yet confirmed.
+
+### One command: list the remaining fixture directories (stage 4, read-only)
 
 **THIS STEP MODIFIES STORAGE** (ordinary development write only)
 
 Scope: creates three new `work/asahi/servicemanager-inspect-*` directories with a
 `listing.txt` each. The image is only read; nothing is executed. Reversal:
-delete the newly printed result directories. The script gained `--part` and
-`--ls` options (still read-only).
-
-Why: the real servicemanager needs VINTF manifests and service-contexts files
-at the paths it reads. This shows which exist in the image before any copy.
+delete the newly printed result directories.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && for spec in "system_a /system/etc/vintf" "vendor_a /vendor/etc/vintf" "system_a /system/etc/selinux"; do set -- $spec; python3 asahi/inspect-servicemanager.py --part $1 --path $2 --ls 2>&1 | grep -v 'THIS STEP\|Creates one\|Delete the'; done
+cd ~/Gbosm1 && for spec in "vendor_a /etc/vintf" "vendor_a /etc/selinux" "system_a /system/etc/vintf/manifest"; do set -- $spec; python3 asahi/inspect-servicemanager.py --part $1 --path $2 --ls 2>&1 | grep -v 'THIS STEP\|Creates one\|Delete the'; done
 ```
 
-If a directory is absent or the partition mount path differs (the vendor
-partition may expose `/etc/vintf` rather than `/vendor/etc/vintf`), say so and I
-will adjust the path. Say **get logs** with the output.
+Say **get logs** with the output.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
