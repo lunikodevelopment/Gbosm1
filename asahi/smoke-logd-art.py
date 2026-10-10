@@ -25,8 +25,10 @@ import tempfile
 SOCKETS = [("logd", socket.SOCK_STREAM, 0o666), ("logdr", socket.SOCK_SEQPACKET, 0o666), ("logdw", socket.SOCK_DGRAM, 0o222)]
 
 SCRIPT = r'''#!/bin/bash
-ROOT="$1"; OUT="$2"; PY="$3"; SELF="$4"; PROPS="$5"; ELFNEEDED="$6"
+ROOT="$1"; OUT="$2"; PY="$3"; SELF="$4"; PROPS="$5"; ELFNEEDED="$6"; APEXINFO="$7"
 say() { printf '\n### %s\n' "$*"; }
+# apexd would write this list when it activates the apexes; linkerconfig fails without it
+"$PY" "$APEXINFO" "$ROOT" 2>&1 | cut -c1-200
 mount --bind "$ROOT" "$ROOT" && mount -o remount,bind,ro "$ROOT" || { echo "FATAL: read-only bind of the tree failed"; exit 1; }
 for d in dev data tmp linkerconfig mnt; do
   mount -t tmpfs -o mode=0755 tmpfs "$ROOT/$d" || { echo "FATAL: tmpfs on /$d failed"; exit 1; }
@@ -43,6 +45,7 @@ BASEENV=(ANDROID_ROOT=/system ANDROID_DATA=/data ANDROID_STORAGE=/storage ANDROI
   ANDROID_RUNTIME_ROOT=/apex/com.android.runtime ANDROID_I18N_ROOT=/apex/com.android.i18n
   ANDROID_TZDATA_ROOT=/apex/com.android.tzdata HOME=/data
   PATH=/apex/com.android.art/bin:/apex/com.android.runtime/bin:/system/bin:/system/xbin:/vendor/bin)
+LDPATH=/apex/com.android.art/lib64:/apex/com.android.i18n/lib64:/apex/com.android.os.statsd/lib64:/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/apex/com.android.conscrypt/lib64:/system/lib64
 inroot() { timeout 120 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "$@" 2>&1; }
 trimmed() { "$@" | head -n "${LINES_MAX:-40}"; echo "exit status: ${PIPESTATUS[0]}"; }
 echo "mounts ready"
@@ -78,15 +81,20 @@ echo "--- what linkerconfig created or wrote:"
 grep -E 'mkdir|O_CREAT|renameat' "$OUT/linkerconfig.trace" 2>/dev/null | sed -E 's/^[0-9]+ +//' | cut -c1-190 | head -n 20
 echo "--- /linkerconfig tree:"
 (cd "$ROOT/linkerconfig" && find . -maxdepth 2 | sort | head -n 40)
-echo "--- logcat -d (last 25):"
-timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | tail -n 25 | cut -c1-240
+echo "--- logcat -d, linkerconfig lines:"
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | grep -E "linkerconfig" | tail -n 15 | cut -c1-260
 
 say "S3 dalvikvm64 -help (uses /linkerconfig/com.android.art/ld.config.txt if it exists)"
 ls -l "$ROOT/linkerconfig/com.android.art" 2>&1 | head -n 4
 LINES_MAX=6 trimmed inroot /apex/com.android.art/bin/dalvikvm64 -help
+if inroot /apex/com.android.art/bin/dalvikvm64 -help | grep -q -E 'CANNOT LINK|Failed to'; then
+  LDENV=(LD_LIBRARY_PATH=$LDPATH); echo "(ART start below will use the LD_LIBRARY_PATH workaround)"
+else
+  LDENV=(); echo "(ART start below uses the generated linker config, no workaround)"
+fi
 
 say "S3b dalvikvm64 -help with LD_LIBRARY_PATH to the apex libraries (workaround test: bypasses the missing per-apex linker config)"
-LDPATH=/apex/com.android.art/lib64:/apex/com.android.i18n/lib64:/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/apex/com.android.conscrypt/lib64:/system/lib64
+
 if command -v strace >/dev/null 2>&1; then
   timeout 60 strace -f -s 600 -o "$OUT/s3b.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" LD_LIBRARY_PATH=$LDPATH \
     /apex/com.android.art/bin/dalvikvm64 -help 2>&1 | head -n 8
@@ -121,7 +129,7 @@ IMG=/system/framework/arm64/boot.art
 BCP=""; for e in "${CPENV[@]}"; do case "$e" in BOOTCLASSPATH=*) BCP="${e#BOOTCLASSPATH=}";; esac; done
 say "S5 dalvikvm64 start with $IMG and a main class that does not exist"
 if [ -n "$BCP" ]; then
-  timeout 150 strace -f -s 160 -o "$OUT/art.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "${CPENV[@]}" LD_LIBRARY_PATH=$LDPATH \
+  timeout 150 strace -f -s 160 -o "$OUT/art.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "${CPENV[@]}" "${LDENV[@]}" \
     /apex/com.android.art/bin/dalvikvm64 -Xbootclasspath:"$BCP" -Ximage:"$IMG" -Xnorelocate -Xusejit:false \
     -cp /apex/com.android.art/javalib/core-oj.jar GbosNoSuchMain 2>&1 | head -n 30
   echo "exit status: ${PIPESTATUS[0]}"
@@ -173,7 +181,7 @@ def main():
         launch(sys.argv[2])
     if os.geteuid() == 0:
         sys.exit("run as your ordinary user, without sudo")
-    print("=== BRING-UP THREAD, STAGE B3f: LOGD SOCKET PATH FIX, LINKERCONFIG LOG, ART LIBRARY CLOSURE (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE B3g: APEX INFO LIST, PER-APEX LINKER CONFIG, ART START (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")
@@ -191,7 +199,8 @@ def main():
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
                "bash", str(script), str(root), str(out), shutil.which("python3") or "python3", str(Path(__file__).resolve()),
                str(Path(__file__).with_name("make-property-area.py").resolve()),
-               str(Path(__file__).with_name("elf-needed.py").resolve())]
+               str(Path(__file__).with_name("elf-needed.py").resolve()),
+               str(Path(__file__).with_name("make-apex-info-list.py").resolve())]
     done = subprocess.run(command, capture_output=True, text=True, timeout=900)
     text = done.stdout + done.stderr
     (out / "log.txt").write_text(text)

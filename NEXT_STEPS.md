@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the logd, linker-config and ART smoke test ("Next action:
-bring-up stage B3f", below) and paste its output.
+bring-up stage B3g", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -689,30 +689,44 @@ Operationally tested on the M1:
   message and a read of the ELF files' `DT_NEEDED` closure.
 - `getprop` still reads the property area correctly (37 and true).
 
-## Next action: bring-up stage B3f, logd with correctly bound sockets, linkerconfig log, ART library closure
+## Results: bring-up stage B3f (reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B3a to
-B3e: one small `work/asahi/root-smoke-*` directory (script, logs, strace traces);
-the tree stays mounted read-only; private tmpfs mounts take every other write and
-vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no
-SELinux module, no binder.
+- **`logd` now runs** with sockets bound at `/dev/socket/<name>` after `chroot`
+  (configured and operationally tested: `logcat -d` reads its buffers). The
+  socket-path diagnosis in B3e was correct.
+- **`linkerconfig` fails for a concrete reason**, seen in `logcat`:
+  `Failed to scan APEX modules : Can't read /apex/apex-info-list.xml`. Without the
+  scan it writes only the default config, so no per-apex config exists and
+  `dalvikvm64` under `/apex/com.android.art/bin` cannot find `libnativehelper.so`.
+- **ART library closure**: `libart.so` also needs `libstatspull.so` and
+  `libstatssocket.so`, which live in the statsd apex (`lib64`). The ELF closure
+  listing showed 28 files and 2 unresolved libraries, both of these.
+- `derive_classpath` succeeded earlier (B3d/B3e); the property stand-in is accepted.
 
-What changes: the `logd` launcher binds its three sockets after `chroot`, then
-drops to uid 1036 with groups 1000, 1032, 3009 and executes `/system/bin/logd`
-(no `strace` wrapper now; its messages go to the stand-in `/dev/kmsg` file). If
-`logd` stays up, `linkerconfig` runs against a working log and `logcat -d` is
-printed. The `dalvikvm64` failure text is printed in full, and
-`asahi/elf-needed.py` lists every library in the `DT_NEEDED` closure of
-`dalvikvm64` and `libart.so` that cannot be found with the test library path
-(read-only, from the ELF headers).
+## Next action: bring-up stage B3g, apex info list, per-apex linker config, ART start
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: adds one small
+file, `apex/apex-info-list.xml`, to the extracted tree under
+`work/asahi/android-root-*/root` (written before the tree is mounted read-only),
+plus one small `work/asahi/root-smoke-*` directory (script, logs, traces). Private
+tmpfs mounts take every other write and vanish at exit. Loss: none. Reversal:
+delete that XML file and the printed directory. No sudo, no SELinux module, no
+binder, no partition, boot or flash change.
+
+What changes: `asahi/make-apex-info-list.py` writes the list from the apex
+manifests already extracted (module name, version, path). `linkerconfig` is then
+run with `logd` up and its per-apex output is checked. `dalvikvm64` is tried first
+with the generated config; if that fails, with an explicit library path that
+includes the statsd apex. Then ART is started with the system `boot.art`, the
+derived `BOOTCLASSPATH` and a main class that does not exist (the expected result
+is "class not found", which would show the runtime and boot image load).
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-logd-art.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B3f`. Paste only the command
-output (not the prompt line) into the thread titled "Remaining steps to boot
-Android".
+Its first line reads `=== BRING-UP THREAD, STAGE B3g`. Paste only the command
+output (not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 
