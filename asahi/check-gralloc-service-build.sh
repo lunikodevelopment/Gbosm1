@@ -33,7 +33,10 @@ for d in $INCS; do IFLAGS="$IFLAGS -I$d"; done
 LIBDRM_SRC=$(dirname "$LIBDRM_H")
 TOOL="clang++ --target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -resource-dir=$HK/clang-resource -std=gnu++20 -fsyntax-only -ferror-limit=0 -w"
 TOOL_PP="clang++ --target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -resource-dir=$HK/clang-resource -std=gnu++20 -w"
-FLAGS="-I$GEN/generated/include -I$ROOT/asahi/android-shims -I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm -I$MG -I$MG/cros_gralloc $IFLAGS"
+HIDL=$(newest 'hidl-build-*' generated/android/hardware/graphics/mapper/4.0/IMapper.h)
+[[ -n $HIDL ]] && echo "Generated HIDL headers: $HIDL"
+HIDLINC=; [[ -n $HIDL ]] && HIDLINC="-I$HIDL/generated -I$HIDL/system_libhwbinder/include"
+FLAGS="-I$GEN/generated/include $HIDLINC -I$ROOT/asahi/android-shims -I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm -I$MG -I$MG/cros_gralloc $IFLAGS"
 FILES="cros_gralloc/aidl/Allocator.cpp cros_gralloc/aidl/Main.cpp cros_gralloc/mapper_stablec/Mapper.cpp"
 for f in $(cd "$MG" && ls cros_gralloc/*.cc 2>/dev/null); do FILES="$FILES $f"; done
 for f in $FILES; do

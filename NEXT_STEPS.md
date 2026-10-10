@@ -2385,7 +2385,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3l complete; stage 3m (build hidl-gen) is next
+## Graphics: stages 0, 1, 2 and 3a-3m complete; stage 3n (recheck service headers) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2423,79 +2423,47 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3m, build `hidl-gen` and generate the HIDL headers
+### Next: Graphics stage 3n, recheck the service headers with the generated HIDL code
 
-Stage 3l showed the allocator service (`Allocator.cpp`) really uses HIDL types:
-`mapper::V4_0::IMapper::BufferDescriptorInfo`, `common::V1_2::PixelFormat` and
-`BufferUsage` with their `toString`, and `gralloc4::decodeBufferDescriptorInfo`
-from `gralloctypes`. The stable-C mapper (`Mapper.cpp`) uses the stable-C
-mapper headers (present in `hardware/interfaces`) and the `gralloc4` metadata
-constants. So patching the HIDL use out is not trivial. Plan: generate the HIDL
-C++ headers and link the image's own `libhidlbase` and `libgralloctypes` (their
-presence in the image is still to be confirmed). This step builds `hidl-gen`
-natively the same way as `aidl` (its own sources plus `libbase` and the host
-`liblog` stand-in, no Soong) and generates headers for `android.hidl.base@1.0`,
-`graphics.common@1.0/1.1/1.2` and `graphics.mapper@4.0`. It needs two more
-Fedora packages. I have not been able to run it here, so build errors are likely.
+Same syntax-only check as stage 3k, now with the stage 3m HIDL headers and the
+libhwbinder headers on the path. Because the compiler stops at the first
+missing header in each include chain, this pass should get further and list
+the next layer of missing headers (expected candidates from earlier stages:
+`system/graphics.h`, `BufferAllocator`, cutils/utils/log pieces). Nothing is
+built or run. I have not run the updated script here.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/hidl-build-*` directory (objects, `hidl-gen`,
-generated headers, `report.txt`). The only system change is the two dnf
-packages; reverse with `sudo dnf remove openssl-devel jsoncpp-devel` (if
-`openssl-devel` was already installed for other work, leave it).
-
-```bash
-sudo dnf install openssl-devel jsoncpp-devel
-cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-hidl-gen-host.sh
-```
-
-First run (reported): `openssl-devel` and `jsoncpp-devel` installed (dnf also
-upgraded `openssl-libs` 3.5.8 to 3.5.9 as a dependency). Compile failed on
-`utils/Errors.h` (libutils include path missing), `uint8_t` in `hidl-hash/Hash.h`
-(missing `<cstdint>`), headers named without their subdirectory
-(`Formatter.h`, `FQName.h`) and `metadata/test.cpp` (a test, needs gmock). The
-script now adds the libutils path, `-include cstdint`, every header directory
-of the tool and skips test sources. Rerun without the dnf line:
+Creates one new `work/asahi/gralloc-check-*` directory with logs and
+`report.txt`. Earlier results are only read. Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-hidl-gen-host.sh
-```
-
-Second run (reported): `hidl-gen` headers are included as `<hidl-util/...>` and
-`<hidl-hash/...>`, so the parent `include` directories are needed too (restored),
-and the forced `-include cstdint` broke `libbase/posix_strerror_r.cpp`
-(now applied only to `hidl-gen`'s own units). Same rerun lines, no dnf:
-
-```bash
-cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-hidl-gen-host.sh
-```
-
-Third run (reported): 52 of 58 units compiled. Remaining: missing
-`<cstring>`/`<algorithm>` transitive includes with this libstdc++ (now forced for
-`hidl-gen` units), `hwbinder/IBinder.h` (the script now shallow-clones
-`system/libhwbinder`, a small download, into the result directory), and my script
-had copied the generated parser header over `hidl-gen_y-helpers.h`, hiding the
-real one (fixed). Same rerun lines:
-
-```bash
-cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-hidl-gen-host.sh
-```
-
-Fourth run (reported): all 58 units compiled; the link failed only because
-`metadata/parser.cpp` is a separate tool with its own `main` (now excluded).
-Same rerun lines:
-
-```bash
-cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-hidl-gen-host.sh
+bash asahi/check-gralloc-service-build.sh
 ```
 
 Send the printed `report.txt`.
+
+### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation
+
+Reported by the user from `work/asahi/hidl-build-FEEqJ0ml` (final run, after
+four fixes to include paths, forced `<cstdint>`/`<cstring>`/`<algorithm>`,
+`libhwbinder` headers, and excluding `metadata/parser.cpp`). Packages installed
+with dnf: `openssl-devel`, `jsoncpp-devel` (also upgraded `openssl-libs` to
+3.5.9). Sources: `system/tools/hidl` 9118bce2 (2025-03-07), `system/libhidl`
+93f79786, `hardware/interfaces` 5688f7eb, `system/libhwbinder` shallow clone of
+android16-release (commit not recorded in the report).
+
+- Operationally tested on the M1: 57 objects compiled and linked into a working
+  `hidl-gen` host binary (it printed its usage).
+- Operationally tested: it generated 20 C++ header files with `-L c++-headers`
+  for `android.hidl.base@1.0`, `android.hardware.graphics.common@1.0/1.1/1.2`
+  and `android.hardware.graphics.mapper@4.0` (including `IMapper.h`,
+  `BnHwMapper.h`, `BpHwMapper.h`, `types.h`, `hwtypes.h`).
+- Not done: the headers have not been compiled into the service. The Android
+  build still has to link `libhidlbase`, `libgralloctypes` and the
+  common/mapper HIDL libraries from the image (their presence is not yet
+  confirmed), since only headers were generated.
 
 ### Result: Graphics stage 3l, HIDL and gralloctypes dependencies
 
