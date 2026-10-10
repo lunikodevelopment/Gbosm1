@@ -48,12 +48,14 @@ rm -rf "$OUT/minigbm.orig"
 echo '== Makefile (head)'
 sed -n 1,60p "$OUT/minigbm/Makefile"
 echo '== Build (make -j4)'
-if make -C "$OUT/minigbm" -j4 >"$OUT/make.log" 2>&1; then echo 'make exit status: 0'; else echo "make exit status: $?"; fi
+# common.mk's default output directory follows $PWD (the first run wrote outside the results
+# directory), so build from inside the copy with an explicit OUT.
+if (cd "$OUT/minigbm" && make -j4 OUT="$OUT/minigbm-build") >"$OUT/make.log" 2>&1; then echo 'make exit status: 0'; else echo "make exit status: $?"; fi
 tail -40 "$OUT/make.log"
 LIB=
 while IFS= read -r f; do
     if nm -D "$f" 2>/dev/null | grep -q ' T gbm_create_device'; then LIB=$f; break; fi
-done < <(find "$OUT/minigbm" -name '*.so*' -type f)
+done < <(find "$OUT/minigbm" "$OUT/minigbm-build" -name '*.so*' -type f 2>/dev/null)
 echo "Built gbm library: ${LIB:-none}"
 [[ -n $LIB ]] || { echo "Stopped: no library exporting gbm_create_device. Send $OUT/report.txt"; exit 1; }
 

@@ -2055,6 +2055,24 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/run-minigbm-apple.sh
 ```
 
+First run (reported by the user, `work/asahi/minigbm-apple-z8KW4UUb`): the
+three edits applied and minigbm built (`libminigbm.so.1.0.0`, make exit 0), so
+its Makefile works natively. The script then stopped because it searched only
+its own directory: minigbm's `common.mk` put the build output under the shell's
+current directory (`~/Gbosm1`) instead. That was a bug in my script, which
+claimed to write only inside `work/asahi/`. The script now builds with an
+explicit output directory inside the results directory. Before rerunning,
+find and remove the stray output from the first run (it is only build output;
+nothing else is in it):
+
+```bash
+cd ~/Gbosm1 && find . -name 'libminigbm.so*' -not -path './work/*'
+```
+
+Delete the directory that command shows (the one that holds
+`libminigbm.so.1.0.0`; `git status --short` should then show nothing new).
+Then rerun the command above.
+
 Send the printed `report.txt`. The modified files stay under minigbm's BSD
 license (`LICENSE` is kept in the copy); the source is AOSP
 `external/minigbm` `455b745` as recorded in stage 3a.
