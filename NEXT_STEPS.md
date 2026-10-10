@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): run the property, logd and linker-config smoke test ("Next action:
-bring-up stage B3c", below) and paste its output.
+Bring-up track (separate thread): run the logd, linker-config and ART smoke test ("Next action:
+bring-up stage B3d", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -619,32 +619,50 @@ Operationally tested on the M1, no sudo and no SELinux change:
   running?". `logcat` waits on the property `logd.ready`, so it needs the property
   area as well as `logd`.
 
-## Next action: bring-up stage B3c, property area, logd, linkerconfig under strace, derive_classpath, ART
+## Results: bring-up stage B3c (`root-smoke-b8z2mnzi`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B3a and
-B3b: one small `work/asahi/root-smoke-*` directory (script, logs, strace
-traces); the tree stays mounted read-only; private tmpfs mounts take every other
-write and vanish at exit. Loss: none. Reversal: delete the printed directory. No
-sudo, no SELinux module, no binder.
+Operationally tested on the M1:
+- **Property stand-in works with Bionic.** One regular file `/dev/__properties__`
+  (563 properties from the five `build.prop` files, 3 skipped as 92+ bytes, 103 KB
+  of 512 KB used) was read by the image's own `getprop`: `ro.build.version.sdk`
+  returned `37` and `logd.ready` returned `true`.
+- **`derive_classpath` now succeeds** (exit 0). Its earlier abort was caused by
+  missing properties. It wrote `/data/system/environ/classpath` with
+  `BOOTCLASSPATH`, `DEX2OATBOOTCLASSPATH`, `SYSTEMSERVERCLASSPATH` and
+  `STANDALONE_SYSTEMSERVER_JARS` (art, framework and apex jars).
+- **`logd` still exits.** The launcher now passes fds 3, 4, 5 correctly, but the
+  process aborted (SIGABRT) with no message; `logcat -d` reports "Connection
+  refused". Reason not yet known.
+- **`linkerconfig` produces no per-apex configs.** Its trace shows it probing
+  `/apex/<name>/bin`, `lib`, `lib64` and `etc/linker.config.pb` for each apex (many
+  `ENOENT`), but the output is still only `ld.config.txt` and an empty
+  `apex.libraries.config.txt`. The linker then falls back to its built-in default
+  config (it tried `/system/etc/ld.config.arm64.txt`), so `dalvikvm64` still cannot
+  find `libnativehelper.so`. Why `linkerconfig` skips them is not established; its
+  own log messages go to `logd`, which is not running.
+- The ART start was not reached.
 
-What changes: (1) a property stand-in. `asahi/make-property-area.py` writes one
-regular file at the private `/dev/__properties__` from the image's `build.prop`
-files (system, system_ext, product, vendor, odm; values of 92 bytes or more are
-skipped and counted), plus `logd.ready=true`, `servicemanager.ready=true` and
-`apexd.status=ready`. The layout is the one of the earlier readiness fixture that
-Bionic accepted; the writer was checked on this side with an independent trie
-reader, not yet by Bionic with a full set. (2) the corrected `logd` launcher, with
-the image's `getprop` read back as a check. (3) `linkerconfig` under `strace`:
-distinct failed opens show what it expected and could not find, then the
-`/linkerconfig` tree and `logcat -d`. (4) `dalvikvm64 -help`, (5) `derive_classpath`
-under `strace` plus `logcat -d`, and (6) if a `BOOTCLASSPATH` file results, the
-ART start with the system boot image and a missing main class.
+## Next action: bring-up stage B3d, why logd aborts, what linkerconfig writes, ART with a library path
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B3a to
+B3c: one small `work/asahi/root-smoke-*` directory (script, logs, strace traces);
+the tree stays mounted read-only; private tmpfs mounts take every other write and
+vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no
+SELinux module, no binder.
+
+What changes: `logd` is started under `strace`, so its failed calls and last
+lines show why it aborts; the `linkerconfig` trace is searched for the files it
+creates; and `dalvikvm64` is tried with `LD_LIBRARY_PATH` pointing at the art,
+i18n, runtime and conscrypt library directories, which bypasses the missing
+per-apex config (a test, not the fix). If that lets the ART binary start, the
+run continues with the ART start using the system boot image and the derived
+`BOOTCLASSPATH` and a main class that does not exist.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-logd-art.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B3c`. Paste only the command
+Its first line reads `=== BRING-UP THREAD, STAGE B3d`. Paste only the command
 output (not the prompt line) into the thread titled "Remaining steps to boot
 Android".
 

@@ -51,11 +51,14 @@ say "S0 property area (one regular file at /dev/__properties__, root-owned, 0444
 ls -ln "$ROOT/dev/__properties__" 2>&1
 
 say "S1 logd with sockets passed in (as init does), uid 1036"
-"$PY" "$SELF" --launch "$ROOT" > "$OUT/logd.out" 2>&1 &
+"$PY" "$SELF" --launch "$ROOT" "$OUT/logd.trace" > "$OUT/logd.out" 2>&1 &
 LOGDPID=$!
 sleep 3
 if kill -0 "$LOGDPID" 2>/dev/null; then echo "logd still running (pid $LOGDPID)"; else echo "logd EXITED"; fi
 echo "--- logd output:"; head -n 20 "$OUT/logd.out" | cut -c1-240
+echo "--- logd strace, failed calls (first 25) and last 20 lines:"
+grep -E '= -1 E' "$OUT/logd.trace" 2>/dev/null | sed -E 's/^[0-9]+ +//' | cut -c1-200 | head -n 25
+tail -n 20 "$OUT/logd.trace" 2>/dev/null | cut -c1-220
 ls -l "$ROOT/dev/socket" | head -n 8
 echo "--- getprop through the image's own getprop:"
 trimmed inroot /system/bin/getprop ro.build.version.sdk
@@ -71,6 +74,8 @@ if command -v strace >/dev/null 2>&1; then
 else
   trimmed inroot /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig
 fi
+echo "--- what linkerconfig created or wrote:"
+grep -E 'mkdir|O_CREAT|renameat' "$OUT/linkerconfig.trace" 2>/dev/null | sed -E 's/^[0-9]+ +//' | cut -c1-190 | head -n 20
 echo "--- /linkerconfig tree:"
 (cd "$ROOT/linkerconfig" && find . -maxdepth 2 | sort | head -n 40)
 echo "--- logcat -d (last 25):"
@@ -79,6 +84,10 @@ timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/
 say "S3 dalvikvm64 -help (uses /linkerconfig/com.android.art/ld.config.txt if it exists)"
 ls -l "$ROOT/linkerconfig/com.android.art" 2>&1 | head -n 4
 LINES_MAX=6 trimmed inroot /apex/com.android.art/bin/dalvikvm64 -help
+
+say "S3b dalvikvm64 -help with LD_LIBRARY_PATH to the apex libraries (workaround test: bypasses the missing per-apex linker config)"
+LDPATH=/apex/com.android.art/lib64:/apex/com.android.i18n/lib64:/apex/com.android.runtime/lib64:/apex/com.android.conscrypt/lib64:/system/lib64
+LINES_MAX=8 trimmed inroot LD_LIBRARY_PATH=$LDPATH /apex/com.android.art/bin/dalvikvm64 -help
 
 say "S4 derive_classpath, with strace; then what the log recorded"
 if command -v strace >/dev/null 2>&1; then
@@ -101,7 +110,7 @@ IMG=/system/framework/arm64/boot.art
 BCP=""; for e in "${CPENV[@]}"; do case "$e" in BOOTCLASSPATH=*) BCP="${e#BOOTCLASSPATH=}";; esac; done
 say "S5 dalvikvm64 start with $IMG and a main class that does not exist"
 if [ -n "$BCP" ]; then
-  timeout 150 strace -f -s 160 -o "$OUT/art.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "${CPENV[@]}" \
+  timeout 150 strace -f -s 160 -o "$OUT/art.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "${CPENV[@]}" LD_LIBRARY_PATH=$LDPATH \
     /apex/com.android.art/bin/dalvikvm64 -Xbootclasspath:"$BCP" -Ximage:"$IMG" -Xnorelocate -Xusejit:false \
     -cp /apex/com.android.art/javalib/core-oj.jar GbosNoSuchMain 2>&1 | head -n 30
   echo "exit status: ${PIPESTATUS[0]}"
@@ -136,15 +145,19 @@ def launch(root):
         env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
         print(f"socket {name}: fd {s.fileno()} mode {mode:o}", flush=True)
     chroot = shutil.which("chroot") or "/usr/sbin/chroot"
-    os.execve(chroot, ["chroot", "--userspec=1036:1036", "--groups=1000,1032,3009", str(root), "/system/bin/logd"], env)
+    command = [chroot, "--userspec=1036:1036", "--groups=1000,1032,3009", str(root), "/system/bin/logd"]
+    trace = sys.argv[3] if len(sys.argv) > 3 else None
+    if trace and shutil.which("strace"):
+        command = [shutil.which("strace"), "-f", "-s", "200", "-o", trace] + command
+    os.execve(command[0], command, env)
 
 
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == "--launch":
+    if len(sys.argv) >= 3 and sys.argv[1] == "--launch":
         launch(sys.argv[2])
     if os.geteuid() == 0:
         sys.exit("run as your ordinary user, without sudo")
-    print("=== BRING-UP THREAD, STAGE B3c: PROPERTY AREA, LOGD, LINKER CONFIG, DERIVE_CLASSPATH, ART (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE B3d: LOGD TRACE, LINKERCONFIG WRITES, ART WITH LIBRARY PATH (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")
