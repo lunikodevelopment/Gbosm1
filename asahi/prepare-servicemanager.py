@@ -104,6 +104,15 @@ def prepare(out, log):
     manager = runtime / 'servicemanager'
     extract('system_a', '/system/bin/servicemanager', manager)
     pending.update(inspect(manager, 'system_a:/system/bin/servicemanager'))
+    # The image's `service` client for the --list-client stage; its libraries join the closure.
+    service = runtime / 'service'
+    if (old / 'service').is_file() and (old / 'service').stat().st_size <= LIMIT:
+        shutil.copyfile(old / 'service', service)
+        pending.update(inspect(service, 'earlier extracted runtime:service'))
+    else:
+        extract('system_a', '/system/bin/service', service)
+        pending.update(inspect(service, 'system_a:/system/bin/service'))
+    service.chmod(0o700)
     done = {'ld-android.so'}
     while pending:
         name = sorted(pending)[0]

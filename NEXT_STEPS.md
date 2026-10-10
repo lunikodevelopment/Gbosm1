@@ -313,6 +313,17 @@ Next (needs the user's go-ahead, since it adds a new client path): run the
 image's own `service list` against it. An answer listing zero services would be
 the first Android-to-Android Binder exchange in this setup.
 
+### First 5b run: the client binary was missing (my bug)
+
+Reported by the user (`work/asahi/real-servicemanager-4i88qaxi`, attached
+report): `servicemanager` again became context manager (`BINDER_SET_CONTEXT_MGR_EXT = 0`)
+and ran to the SIGTERM; cleanup codes 0; no new AVC denials (the ones printed
+are the old 21:42:39 ones). The list client failed before connecting:
+`unable to open file ".../android-runtime/service"`, because
+`prepare-servicemanager.py` did not copy the `service` binary into this
+mode's runtime. The extraction now copies it (and adds its libraries to the
+closure). No Binder exchange between the two Android processes has happened yet.
+
 ## Run now: stage 5b, the image's `service list` against the real servicemanager
 
 **THIS STEP MODIFIES STORAGE**
