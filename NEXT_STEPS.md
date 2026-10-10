@@ -10,10 +10,96 @@ Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: retain the completed object/FD and Android libbinder results; these
-probes do not need to be rerun. The next Binder milestone is Android Parcel
-object/FD handling against a controlled endpoint before real servicemanager or
-HAL integration. No new execution command is issued by this result review.
+Next action: run the controlled Android Parcel probe below. It is implemented
+and awaits target execution. Retain the completed native object/FD and Android
+empty-list results; those probes do not need to be rerun.
+
+## One command: Android returned object and outgoing FD Parcel
+
+**THIS STEP MODIFIES STORAGE**
+
+Git updates source in `~/Gbosm1`, preserving history and stopping on conflicts.
+The runner creates a new `work/asahi/android-parcel-probe-*` directory containing
+copied Android runtime files, a native endpoint executable, generated policy,
+client output, syscall trace and reports. It reuses the prepared service runtime
+and rechecks its ARM64/16 KiB ELF files. The existing extraction limits (64 MiB
+per member, 64 libraries; bounded APEX scratch if an extra library is needed)
+remain in force. Retain earlier reports and the recovery image.
+
+Inside the existing private `/dev` tmpfs, the launcher exposes a new sealed
+16 KiB memfd at `/dev/gbos-parcel-input`, a private Binder alias and the proven
+single-file readiness property fixture. The memory file is created after the
+server fork; it is not inherited by the server. The image's service client
+opens the input path read-only and serializes that FD through Android Parcel.
+The input mount, Binder/proc mounts, property file and anonymous memory file
+are released on namespace/process exit. Fedora's host `/dev` is retained.
+
+The runner temporarily installs `gbos_binder_probe` and labels only the new
+endpoint executable, affecting the active policy/store until cleanup. It uses
+the same object-transfer and memfd read/getattr/map rules as the completed native
+transfer mode, with the actual observed memfd type. It restores the label and
+removes the module afterward, refuses a preexisting module, and keeps SELinux
+enforcing. Failed/interrupted cleanup may leave the module/label installed;
+reversal instructions remain below. No additional policy permission is added
+for this mode beyond the completed native transfer policy.
+
+Run as `gbos_user`; sudo is for the scoped policy/label and audit operations.
+This command uses the already installed prerequisites and installs no packages:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --android-parcel
+```
+
+The unmodified image `/system/bin/service` runs through the extracted Android
+linker with its local Bionic/system libraries, under client-only strace. It
+performs `call gbos.parcel 5658 i32 5658 fd /dev/gbos-parcel-input`. This is a
+controlled native endpoint with one private service lookup; it is not Android
+servicemanager, service registration or a HAL. The endpoint:
+
+1. Checks the `android.os.IServiceManager` token and the exact `gbos.parcel`
+   lookup name. Its checkService2 reply contains a `Service` union holding a
+   sized `ServiceWithMetadata` with the Binder object, system stability and
+   lazy metadata. These are explicit fixtures for the scoped lookup.
+2. Returns an interface descriptor on the object. It then verifies that the
+   Android client's custom call reaches that object's original pointer/cookie,
+   proving the returned object was decoded and used by image libbinder.
+3. Checks the interface token, integer challenge and FD object/offset from the
+   image's actual Parcel. It verifies the received file's full 16384-byte pattern
+   through mmap and pread, size/type, seals, read-only mode and CLOEXEC.
+4. Replies with receipt integers `0x47504231` and `16384`. The runner checks the
+   Android client's actual printed reply dump for these values, as well as
+   native markers, both process exits and cleanup. CLI exit 0 alone is
+   insufficient because the service command ignores transact's return value.
+
+Expected evidence: `STUB_READY_PROPERTY=CREATED`, `PARCEL_INPUT=READY`,
+`ANDROID_OBJECT_READ=PASS`, `ANDROID_FD_WRITE=PASS`,
+`PARCEL_ENDPOINT_REPLY=PASS`, `ANDROID_PARCEL=PASS`,
+`android_receipt_verified: true`, execution/summary exit 0, and policy/label
+cleanup codes 0. The execution's memfd type must match the generated policy.
+The Android output is retained separately in `android-runtime/parcel-client.stdout`
+and copied into the report/summary. The full syscall trace remains
+`android-runtime/client.trace`; its tail is collected on failure as well.
+Unknown transaction codes or layouts stop and retain `PARCEL_TRANSACTION` and
+`PARCEL_HEX` rather than guessing additional service-manager behavior.
+
+Wire reference: frameworks/native revision
+`4f463a6b1de9198963dc6aff74154a504ba3f8f6`, the IServiceManager/Service/
+ServiceWithMetadata AIDLs, Parcel.cpp, service.cpp and Stability.h. The recovery
+image is Android 17; its compatibility with this scoped reply layout must be
+established by the target run. No image binary is patched or API intercepted.
+
+**Reversal:** confirm both cleanup codes are 0. If interrupted, restore only
+the new executable's recorded original context before removing the temporary
+module, following the cleanup instructions below. Delete only the new printed
+result directory after cleanup to reverse generated files. Git retains source
+history. The private input/property fixtures disappear with their namespace.
+
+After it finishes, say **get logs**. I will fetch the report, summary, client
+output and trace through the HTTP listing. A pass establishes Android decoding/
+calling a returned Binder object and **writing an outgoing FD Parcel**, verified
+by the native endpoint. It does not establish Android receiving/reading an FD,
+exporting a local Binder object, full lifetimes, death notifications, DMA-BUF,
+fences, real servicemanager, HALs, Android boot or graphics.
 
 ## Completed native Binder object/FD milestone
 
