@@ -71,7 +71,7 @@ echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf 
 echo "--- logcat -d, last 40 (zygote, ART, libc, DEBUG):"
 timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | grep -v -E 'derive_classpath|CompatibilityRules|Resources:|nativeloader: (Load|Configuring)|ApplicationLoaders' | tail -n 60 | cut -c1-260
 echo "--- logcat -d, fatal and error lines only, without the abort stack dump (the reason for an abort is here):"
-timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -v time '*:E' 2>&1 | grep -v -E 'runtime.cc:769|derive_classpath|Zygote  :.*(\tat|at com)' | head -n 40 | cut -c1-300
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -v time '*:E' 2>&1 | grep -v -E 'runtime.cc:769|derive_classpath|Zygote  :.*at com' | head -n 40 | cut -c1-300
 if [ -s "$OUT/zygote.trace" ]; then
   echo "--- failed file/network calls in the trace, distinct (first 30):"
   grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload|SO_DOMAIN|/mnt/expand|resource-cache|/sys/devices/system/cpu|trace_marker|qgl_config|statsdw' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
