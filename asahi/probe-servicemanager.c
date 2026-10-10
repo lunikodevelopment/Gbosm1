@@ -22,6 +22,37 @@ static int run_servicemanager(const char *runtime) {
     return 1;
 }
 
+/* Runs one image program unconfined in the private root under strace; stdout to `output`.
+ * Returns the wait status, or -1 when it had to be killed after `seconds`. */
+static int run_in_root(const char *root, const char *runtime, const char *trace, const char *output,
+                       const char *program, const char *arg1, const char *arg2, const char *arg3, int seconds) {
+    char libraries[4096], library_env[4200], linker[4096], image[4096];
+    PATH_JOIN(libraries, runtime, "lib64"); PATH_JOIN(linker, runtime, "linker64"); PATH_JOIN(image, runtime, program);
+    require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) < (int)sizeof(library_env),
+            "library environment too long");
+    pid_t pid = fork(); if (pid < 0) fail("fork image program");
+    if (pid == 0) {
+        int out = open(output, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+        if (out < 0 || dup2(out, STDOUT_FILENO) < 0) fail("redirect image program output");
+        if (chroot(root) || chdir("/")) fail("enter private root for image program");
+        execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", trace, "-E", library_env,
+              linker, image, arg1, arg2, arg3, (char *)NULL);
+        fail("execute traced image program");
+    }
+    int status = 0;
+    for (int step = 0; step < seconds * 10; step++) {
+        if (waitpid(pid, &status, WNOHANG) == pid) return status;
+        usleep(100000);
+    }
+    kill(pid, SIGKILL); waitpid(pid, &status, 0);
+    return -1;
+}
+static void report_status(const char *label, int status) {
+    if (status == -1) printf("%s=timed out\n", label);
+    else printf("%s=%s %d\n", label, WIFEXITED(status) ? "exit status" : "signal",
+                WIFEXITED(status) ? WEXITSTATUS(status) : WTERMSIG(status));
+}
+
 static void bind_mount(const char *source, const char *target, unsigned long flags, int required) {
     if (mount(source, target, NULL, MS_BIND | flags, NULL)) {
         if (required) fail(target);
@@ -45,7 +76,11 @@ int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[2], "--describe") == 0) return native_echo_main(argc, argv);
     int with_client = argc == 5 && strcmp(argv[4], "--list-client") == 0;
     int with_register = argc == 5 && strcmp(argv[4], "--register-parcel") == 0;
-    require((argc == 4 || with_client || with_register) && sysconf(_SC_PAGESIZE) == 16384,
+    int with_serve = argc == 6 && strcmp(argv[4], "--serve-image") == 0;
+    const char *served = with_serve ? argv[5] : NULL;
+    require(!with_serve || (strlen(served) < 128 && strspn(served, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == strlen(served)),
+            "unsupported image program name");
+    require((argc == 4 || with_client || with_register || with_serve) && sysconf(_SC_PAGESIZE) == 16384,
             "requires mount directory, runtime directory, root directory, optional --list-client and 16 KiB pages");
     alarm(30);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs");
@@ -95,7 +130,7 @@ int main(int argc, char **argv) {
         fail("execute traced servicemanager");
     }
     int status = 0, exited = 0;
-    if (with_client || with_register) {
+    if (with_client || with_register || with_serve) {
         /* The real servicemanager would set servicemanager.ready through the property
          * service, which is absent here; the client library waits for it, so publish the
          * same private immutable fixture the earlier probes used (not Android init). */
@@ -151,6 +186,56 @@ int main(int argc, char **argv) {
             if (!edone) { kill(epid, SIGKILL); waitpid(epid, &estatus, 0); puts("REGISTER_ENDPOINT=did not finish within three seconds"); }
             else printf("REGISTER_ENDPOINT=%s %d\n", WIFEXITED(estatus) ? "exit status" : "signal",
                         WIFEXITED(estatus) ? WEXITSTATUS(estatus) : WTERMSIG(estatus));
+        }
+        if (!exited && with_serve) {
+            /* The image's own program serves; the image's `service` CLI is the client. */
+            char server_trace[4096], server_out[4096], list_trace[4096], list_out[4096], call_trace[4096], call_out[4096];
+            PATH_JOIN(server_trace, argv[2], "server.trace"); PATH_JOIN(server_out, argv[2], "server.stdout");
+            PATH_JOIN(list_trace, argv[2], "list-client.trace"); PATH_JOIN(list_out, argv[2], "list-client.stdout");
+            PATH_JOIN(call_trace, argv[2], "call-client.trace"); PATH_JOIN(call_out, argv[2], "call-client.stdout");
+            char libraries[4096], library_env[4200], linker[4096], image[4096];
+            PATH_JOIN(libraries, argv[2], "lib64"); PATH_JOIN(linker, argv[2], "linker64"); PATH_JOIN(image, argv[2], served);
+            require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) < (int)sizeof(library_env),
+                    "library environment too long");
+            pid_t spid = fork(); if (spid < 0) fail("fork image server");
+            if (spid == 0) {
+                if (setpgid(0, 0)) fail("own server process group");
+                int out = open(server_out, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+                if (out < 0 || dup2(out, STDOUT_FILENO) < 0 || dup2(out, STDERR_FILENO) < 0) fail("redirect image server output");
+                if (chroot(argv[3]) || chdir("/")) fail("enter private root for image server");
+                execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", server_trace, "-E", library_env,
+                      linker, image, (char *)NULL);
+                fail("execute traced image server");
+            }
+            usleep(2000000);
+            int sstatus = 0;
+            if (waitpid(spid, &sstatus, WNOHANG) == spid) {
+                report_status("IMAGE_SERVER_EXITED_EARLY", sstatus);
+            } else {
+                report_status("SERVE_LIST_CLIENT", run_in_root(argv[3], argv[2], list_trace, list_out, "service", "list", NULL, NULL, 10));
+                /* Find the registered name for the served program in the list output: "<n>\t<name>: [<descriptor>]". */
+                char name[256] = "", text[8192] = ""; FILE *f = fopen(list_out, "r");
+                if (f) { size_t got = fread(text, 1, sizeof(text) - 1, f); text[got] = 0; fclose(f); }
+                char key[160]; snprintf(key, sizeof(key), "%s", served);
+                for (char *line = strtok(text, "\n"); line; line = strtok(NULL, "\n")) {
+                    char *tab = strchr(line, '\t'), *colon = tab ? strchr(tab, ':') : NULL;
+                    if (tab && colon && colon - tab < (long)sizeof(name) &&
+                        (strstr(line, "disk_info") || strstr(line, "gsi") || strstr(line, key))) {
+                        snprintf(name, sizeof(name), "%.*s", (int)(colon - tab - 1), tab + 1); break;
+                    }
+                }
+                if (name[0]) {
+                    printf("SERVE_NAME_FOUND=%s\n", name);
+                    /* 1598968902 = INTERFACE_TRANSACTION: the service returns its interface descriptor. */
+                    report_status("SERVE_CALL_CLIENT", run_in_root(argv[3], argv[2], call_trace, call_out, "service", "call", name, "1598968902", 10));
+                } else {
+                    puts("SERVE_NAME_FOUND=none: the served program did not appear in the service list");
+                }
+                kill(-spid, SIGTERM);
+                for (int step = 0; step < 30 && waitpid(spid, &sstatus, WNOHANG) == 0; step++) usleep(100000);
+                if (kill(-spid, SIGKILL) == 0) waitpid(spid, &sstatus, 0);
+                puts("IMAGE_SERVER_STOPPED");
+            }
         }
         if (!exited && with_client) {
             char client[4096], libraries[4096], library_env[4200], output[4096], client_trace[4096];

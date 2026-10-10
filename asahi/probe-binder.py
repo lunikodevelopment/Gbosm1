@@ -35,7 +35,13 @@ def main():
                         help="with --real-servicemanager: also run the image's own `service list` against it")
     parser.add_argument('--register-parcel', action='store_true',
                         help="with --real-servicemanager: a native endpoint registers through the real addService and the image's service CLI runs the Parcel call against it")
+    parser.add_argument('--serve-image', metavar='PART:PATH',
+                        help="with --real-servicemanager: run this image program (for example vendor_a:/bin/disk_info_service) as a server and call it with the image's service CLI")
     args = parser.parse_args()
+    if args.serve_image and not args.real_servicemanager:
+        parser.error('--serve-image requires --real-servicemanager')
+    if args.serve_image and (args.list_client or args.register_parcel):
+        parser.error('choose one of --list-client, --register-parcel and --serve-image')
     if (args.list_client or args.register_parcel) and not args.real_servicemanager:
         parser.error('--list-client and --register-parcel require --real-servicemanager')
     if args.list_client and args.register_parcel:
@@ -191,7 +197,7 @@ def main():
             spec = importlib.util.spec_from_file_location('sm_extract', Path(__file__).with_name('prepare-servicemanager.py'))
             extraction = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(extraction)
-            result['android_runtime'] = extraction.prepare(out, log)
+            result['android_runtime'] = extraction.prepare(out, log, args.serve_image)
             binary = Path(result['android_runtime']['runtime']) / 'binder-echo'
             result['limitations'] = ['Only the image servicemanager is started, for six seconds; with --list-client the image `service list` runs against it, with --register-parcel a native endpoint registers through the real addService and the image `service call` exercises it. No HAL.',
                                     'servicemanager.ready is a private immutable fixture, the property service is absent, and SELinux checks on service_manager are only observed as unknown-class allowed by deny_unknown.',
@@ -320,7 +326,7 @@ def main():
                 except OSError:
                     optional[key] = None
             result['sm_policy_types'] = {'tree': sorted(tree_types), **optional}
-            if args.register_parcel:
+            if args.register_parcel or args.serve_image:
                 # The real servicemanager replies to the client's lookup with a handle for the
                 # endpoint's object: the kernel checks transfer from the servicemanager domain
                 # to the receiving client. The same pair was denied for a different reply in
@@ -398,6 +404,8 @@ def main():
                 command.append('--list-client')
             if args.register_parcel:
                 command.append('--register-parcel')
+            if args.serve_image:
+                command.extend(['--serve-image', result['android_runtime']['served_program']['runtime_name']])
         result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
                                   else 'transfer' if args.object_fd else 'echo', 40)
         marker = ('SM_LAUNCHER=DONE' if sm_mode else 'ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
@@ -469,6 +477,23 @@ def main():
             log('REGISTER_RECEIPT_VERIFIED=' + str(receipt))
             if missing or not receipt:
                 raise RuntimeError('registered-endpoint markers or printed receipt missing: ' + ', '.join(missing))
+        if args.serve_image:
+            runtime_dir = Path(result['android_runtime']['runtime'])
+            def read_out(name):
+                path = runtime_dir / name
+                return path.read_text(errors='replace')[:65536] if path.is_file() else ''
+            result['serve_image'] = {'program': args.serve_image, 'server_stdout': read_out('server.stdout'),
+                                     'list_stdout': read_out('list-client.stdout'), 'call_stdout': read_out('call-client.stdout')}
+            for label in ('server_stdout', 'list_stdout', 'call_stdout'):
+                log(label.upper() + ':\n' + result['serve_image'][label])
+            found = re.search(r'^SERVE_NAME_FOUND=(\S+)', output, re.M)
+            result['serve_image']['name'] = found[1] if found else None
+            result['serve_image']['call_result'] = bool(re.search(r'Result:\s*Parcel\(', result['serve_image']['call_stdout']))
+            missing = [m for m in ('SERVE_LIST_CLIENT=exit status 0', 'SERVE_CALL_CLIENT=exit status 0', 'IMAGE_SERVER_STOPPED') if m not in output]
+            result['missing_markers'] = missing
+            log('SERVE_IMAGE_NAME=' + str(result['serve_image']['name']) + ' CALL_RESULT=' + str(result['serve_image']['call_result']))
+            if missing or not result['serve_image']['name'] or not result['serve_image']['call_result']:
+                raise RuntimeError('served-program markers, registered name or call result missing: ' + ', '.join(missing))
         if args.object_fd:
             actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
             if not actual or type_of(actual[1]) != memfd_type:
@@ -502,7 +527,7 @@ def main():
                     with trace.open(errors='replace') as stream:
                         tail = ''.join(deque(stream, maxlen=100))
                     (out / 'client-trace-tail.txt').write_text(tail)
-                    list_trace = out / 'android-runtime' / ('parcel-client.trace' if args.register_parcel else 'list-client.trace')
+                    list_trace = out / 'android-runtime' / ('parcel-client.trace' if args.register_parcel else 'server.trace' if args.serve_image else 'list-client.trace')
                     if sm_mode and list_trace.is_file():
                         with list_trace.open(errors='replace') as stream:
                             list_tail = ''.join(deque(stream, maxlen=60))

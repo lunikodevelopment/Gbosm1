@@ -39,7 +39,8 @@ def previous_runtime():
     raise ValueError('no earlier extracted Android runtime found; run --android-service first')
 
 
-def prepare(out, log):
+def prepare(out, log, server=None):
+    """server: optional 'part:/absolute/path' of one more image program to extract (stage 6)."""
     helper = load('audit-recovery.py', 'recovery')
     graphics = load('audit-graphics.py', 'graphics')
     old, record = previous_runtime()
@@ -113,6 +114,15 @@ def prepare(out, log):
         extract('system_a', '/system/bin/service', service)
         pending.update(inspect(service, 'system_a:/system/bin/service'))
     service.chmod(0o700)
+    if server:
+        part, _, path = server.partition(':')
+        if part not in offsets or not re.fullmatch(r'/[A-Za-z0-9_./-]+', path):
+            raise ValueError('unsupported image program: ' + server)
+        served = runtime / Path(path).name
+        extract(part, path, served)
+        served.chmod(0o700)
+        pending.update(inspect(served, server))
+        result['served_program'] = {'source': server, 'runtime_name': served.name}
     done = {'ld-android.so'}
     while pending:
         name = sorted(pending)[0]
