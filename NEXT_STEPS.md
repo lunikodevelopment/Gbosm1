@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): extract the root tree ("Next action:
-bring-up stage B1b", below) and paste its output.
+Bring-up track (separate thread): extract the apex payloads ("Next action:
+bring-up stage B2a", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -544,32 +544,46 @@ What this changes in the plan:
   running kernel does not list `erofs` in `/proc/filesystems`, so a kernel mount
   is out and extraction is the route.
 
-## Next action: bring-up stage B1b, extract the root tree
+## Results: bring-up stage B1b, root tree extracted (`android-root-7nqprryz`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: one new
-`work/asahi/android-root-*` directory in your checkout, expected 4 to 10 GiB
-(it refuses to start with under 30 GiB free). Filesystem: your home filesystem.
-The recovery image is only read. Nothing from the tree is executed or mounted.
-Possible loss: none to existing data. Files are owned by sub-ids (524288 and
-up), so your normal user cannot delete them directly; reversal is the command
-the script prints at the end (`unshare --user --map-auto --map-root-user rm -rf
-<dir>`). No sudo, no partitioning, no SELinux change.
+- All four `fsck.erofs` extractions exited 0 with no warnings (1 to 2 s each).
+  The tree is 5.8 GB at `work/asahi/android-root-7nqprryz/root`; `system_a` is
+  the root (it holds `/system`, `/apex`, `/linkerconfig`, `/dev`, `/proc`,
+  `/data` and the absolute symlinks such as `/bin` and `/etc`), with `vendor`,
+  `product` and `system_ext` placed under it. `odm` is a directory in the root.
+- Owners: 7879 entries are uid 0, three are uid 1000, one is uid 1036 (`logd`
+  is owned by `logd` and mode 0550; `/data` is 1000:1000). Most image files are
+  root-owned, with the group (2000, shell) varying. The Android runtime users
+  therefore only matter at run time (`setuid` after start), which the 65535-id
+  namespace allows.
+- `system/apex` holds the `.apex` zips; `/apex` itself is empty, as in a device
+  before `apexd` runs. Android `security.selinux` labels are not applied; the
+  `.` after the modes is Fedora's own label on our files.
+- Not shown: that anything in the tree runs.
 
-Why: ART, `logd`, the property service stand-in and any later `init` try need
-`/system`, `/vendor`, `/product` and `/system_ext` as real directories with
-Android owners. The script first checks that the namespace gets ids 1..65535 and stops before writing anything if not. It extracts `system_a` as the
-root and `vendor_a`, `product_a`, `system_ext_a` under it (if the image has a
-symlink at one of those names, it is replaced by a directory in the new tree
-only), then prints top-level listing, sizes, owner counts and a few sample
-files.
+## Next action: bring-up stage B2a, extract the apex payloads into `/apex`
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: writes only
+under the extracted tree's `apex/` directory (expected a few hundred MB up to
+about 2 GiB), in your home filesystem. The `.apex` files are only read; nothing
+is mounted or executed. Loss: none. Reversal: the script prints a `rm -rf
+.../apex/*` command to run in the namespace (or remove the whole tree with the
+command from the previous step).
+
+Why: Bionic's `libc.so`, the linker, `dalvikvm64`, `linkerconfig`,
+`derive_classpath` and the ICU/tzdata/conscrypt libraries live in apexes that
+`apexd` would mount at `/apex/<name>` on a device. With them extracted, a
+`chroot` into the tree can run the image's own programs directly, with no
+per-program library copying. The script reads each apex's real name from its
+`apex_manifest.pb` (for example the Google ART apex is `com.android.art`),
+extracts every uncompressed erofs payload it can, and lists what was skipped.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/extract-android-root.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/extract-apexes.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B1b`. Wait for the prompt (a
-few minutes) and paste the output into the thread titled "Remaining steps to
-boot Android".
+Its first line reads `=== BRING-UP THREAD, STAGE B2a`. Paste the output into the
+thread titled "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 
