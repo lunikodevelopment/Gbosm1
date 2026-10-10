@@ -51,6 +51,8 @@ chmod 0751 "$ROOT/mnt/user/0"
 echo "/storage in the tree: $(ls -ld "$ROOT/storage" 2>&1)"
 # init mounts sysfs and the cgroup hierarchies; here /sys is a private tmpfs so the cgroup paths can exist
 if [ -d "$ROOT/sys" ]; then mount -t tmpfs -o mode=0755 tmpfs "$ROOT/sys" && echo "tmpfs on /sys (stand-in: no sysfs, no real cgroups)"; else echo "NOTE: tree has no /sys"; fi
+# /metadata, /data_mirror and /cache are mount points on a device (B6b listed their missing subfolders); private tmpfs here
+for d in metadata data_mirror cache; do [ -d "$ROOT/$d" ] && mount -t tmpfs -o mode=0755 tmpfs "$ROOT/$d" && echo "tmpfs on /$d"; done
 say "S0b every mkdir and symlink of the image's init .rc files, replayed under the tmpfs mounts, plus cgroups.json paths"
 "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
@@ -81,7 +83,7 @@ sleep 3
 if kill -0 "$LOGDPID" 2>/dev/null; then echo "logd still running"; else echo "logd EXITED"; fi
 head -n 6 "$OUT/logd.out" | cut -c1-200
 
-SMPID=""
+SMPID=""; APEXDPID=""
 if [ -n "$SMCTX" ]; then
   say "S1b private binderfs (binder, hwbinder, vndbinder) and the image's servicemanager in the temporary domain"
   mkdir -p "$ROOT/dev/binderfs"
@@ -102,6 +104,13 @@ if [ -n "$SMCTX" ]; then
     head -n 10 "$OUT/servicemanager.out" | cut -c1-220
     echo "servicemanager domain: $(cat "$ROOT"/proc/[0-9]*/attr/current 2>/dev/null | tr '\0' '\n' | grep -m1 gbos_binder_probe_t || echo 'not seen')"
   else echo "binderfs mount FAILED"; fi
+  say "S1c the image's apexd (init starts it on demand for aidl/apexservice; here upfront, in its own mount namespace)"
+  if command -v strace >/dev/null 2>&1; then ATR=(strace -f -s 160 -o "$OUT/apexd.trace"); else ATR=(); fi
+  unshare --mount --propagation private "${ATR[@]}" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/apexd > "$OUT/apexd.out" 2>&1 &
+  APEXDPID=$!
+  sleep 5
+  if kill -0 "$APEXDPID" 2>/dev/null; then echo "apexd still running"; else wait "$APEXDPID"; echo "apexd EXITED, status $?"; fi
+  head -n 10 "$OUT/apexd.out" | grep -v linkerconfig | cut -c1-200
 fi
 
 say "S2 derive_classpath"
@@ -157,11 +166,22 @@ if [ -s "$OUT/zygote.trace" ]; then
   grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload|SO_DOMAIN|/mnt/expand|resource-cache|/sys/devices/system/cpu|trace_marker|qgl_config|statsdw' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
   echo "--- last 10 trace lines:"; tail -n 10 "$OUT/zygote.trace" | cut -c1-200
 fi
-echo "--- property set requests the stand-in received (first 40 of $(wc -l < "$OUT/property-sets.log" 2>/dev/null)):"
-head -n 41 "$OUT/property-sets.log" 2>/dev/null | cut -c1-200
+echo "--- property set requests the stand-in received ($(wc -l < "$OUT/property-sets.log" 2>/dev/null) lines; repeats counted):"
+sed -E 's/ \((updated|added)\)$//' "$OUT/property-sets.log" 2>/dev/null | awk '{c[$0]++; if (!o[$0]++) l[++n]=$0} END {for (i=1;i<=n;i++) printf "%4d %s\n", c[l[i]], l[i]}' | head -n 50 | cut -c1-200
 echo "--- system_server lines in logcat (last 25):"
 timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' (SystemServer|SystemServiceManager|ServiceManager|servicemanager|system_server|Looper|ActivityManager|PackageManager)' | grep -v 'runtime.cc:769' | tail -n 25 | cut -c1-260
-pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID 2>/dev/null
+if [ -n "$APEXDPID" ]; then
+  echo "--- apexd in logcat (first 30 lines, then last 10):"
+  timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' apexd' > "$OUT/apexd.logcat"
+  head -n 30 "$OUT/apexd.logcat" | cut -c1-240; echo "..."; tail -n 10 "$OUT/apexd.logcat" | cut -c1-240
+  if [ -s "$OUT/apexd.trace" ]; then
+    echo "--- apexd failed calls, distinct (first 25):"
+    grep -E '= -1 E' "$OUT/apexd.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'ld.so.preload|/proc/self' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 25
+    echo "--- apexd mount, loop and device-mapper calls (first 15):"
+    grep -E '(mount|umount2)\(|loop|device-mapper|/dev/block' "$OUT/apexd.trace" | cut -c1-200 | head -n 15
+  fi
+fi
+pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID $APEXDPID 2>/dev/null
 echo; echo "steps finished"
 '''
 

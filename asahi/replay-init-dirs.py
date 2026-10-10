@@ -24,7 +24,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-WRITABLE = ("/dev/", "/data/", "/mnt/", "/linkerconfig/", "/tmp/", "/sys/")
+WRITABLE = ("/dev/", "/data/", "/mnt/", "/linkerconfig/", "/tmp/", "/sys/", "/metadata/", "/data_mirror/", "/cache/")
 
 
 def rc_files(root):
@@ -160,7 +160,7 @@ def main():
         (root / g.lstrip("/")).mkdir(parents=True, exist_ok=True)
     print(f"cgroup directories from cgroups.json and {joins} task-profile JoinCgroup actions (stand-ins, no controller behind them): "
           f"{len(groups)}: {' '.join(groups[:30]) or 'none'}")
-    print(f"init dirs: {len(files)} .rc files read; {made} mkdir and {links} symlink replayed under /dev /data /mnt /linkerconfig /tmp /sys")
+    print(f"init dirs: {len(files)} .rc files read; {made} mkdir and {links} symlink replayed under the tmpfs mounts (/dev /data /mnt /linkerconfig /tmp /sys /metadata /data_mirror /cache)")
     print(f"  skipped with property expansions: {len(expanded)}; owner/group names Bionic did not know: {sorted(unknown) or 'none'}")
     for line in failures[:15]:
         print(f"  FAILED {line}")

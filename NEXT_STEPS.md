@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6d", below) and paste its output.
+bring-up stage B6e", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1059,7 +1059,28 @@ Operationally tested on the M1:
 - `service list` after the run: `Found 1 services: manager` (system_server registered
   nothing before it stopped). No enforced SELinux denials; the module was removed.
 
-## Next action: bring-up stage B6d, ashmem stand-in
+## Results: bring-up stage B6d (`root-smoke-g2yir_v1`; reported by the user)
+
+- **The ashmem stand-in worked; system_server stayed up for the whole 45 s window**
+  (operationally tested). The image's libcutils has both branches (`use_memfd`,
+  `__memfd_create_region`, `__ashmem_create_region`, "Unable to stat ashmem device");
+  `ro.treble.enabled=true`; `sys.use_memfd` is not set in any build.prop.
+- `service list` while it ran: `Found 3 services`: `manager`, `protolog_configuration`
+  and `system_server_dumper` (the first two registered by system_server).
+- system_server reached `StartServices` -> `startBootstrapServices` ->
+  `ArtModuleServiceInitializer`, `StartWatchdog`, `StartProtoLogConfigurationService`,
+  `PlatformCompat`, then its main thread waited for **`apexservice`** ("Waited one second
+  for apexservice", once per second) and asked init to start it
+  (`ctl.interface_start=aidl/apexservice`, 40+ times; the stand-in only logs these). The
+  Watchdog's pre-timeout dump ran (`WAITED_UNTIL_PRE_WATCHDOG`) and failed harmlessly
+  (no tombstoned, no `binder_logs`). Inference: `PlatformCompat` reads compat config from
+  the active apexes through ApexManager, which needs apexd's binder service.
+- Other: no `traced_producer` socket (Perfetto), `HwBinder: ... HIDL is not supported on
+  this device` (fake HwNoService, expected). The SIGSEGV lines with address 0 in the trace
+  are in ART threads that kept running (ART uses such faults for null checks). No enforced
+  SELinux denials; the module was removed.
+
+## Next action: bring-up stage B6e, the image's apexd
 
 Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
 October 2026).
@@ -1082,7 +1103,19 @@ was interrupted, run `sudo semodule -r gbos_binder_probe`, then delete the print
 directory. No partition, boot, flash or enforcement change; no host device beyond the
 private binderfs.
 
-What changes from B6c: a second dependency-free preload library,
+What changes from B6d: after servicemanager the run starts the image's own
+`/system/bin/apexd` (no arguments, the daemon mode init uses for `aidl/apexservice`) as
+root of the sandbox, chrooted into the tree, in its own private mount namespace, under
+strace. It cannot reach host block, loop or device-mapper devices (the sandbox `/dev` has
+none) and its property requests, including any reboot request, only reach the stand-in.
+`/metadata`, `/data_mirror` and `/cache` get private tmpfs mounts (they are mount points on
+a device) and the init directory replay now covers them. The output adds apexd's log lines,
+its failed calls and any mount/loop/device-mapper calls, and the property requests are
+counted instead of repeated. Expected: either apexd registers `apexservice` (from the
+already extracted `/apex` tree) and system_server continues, or apexd's own log shows what
+it needs.
+
+Earlier change (B6d): a second dependency-free preload library,
 `asahi/sandbox-ashmem-shim.c` (test-only), provides libcutils' `ashmem_create_region`,
 `ashmem_set_prot_region`, `ashmem_get_size_region`, `ashmem_pin_region`,
 `ashmem_unpin_region` and `ashmem_valid` following the memfd branch of AOSP's
