@@ -13,9 +13,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the read-only `.rc` scan under "Run now: init .rc scan" and
-the stage 6d command below, then paste both outputs. The optional permissive
-run (one run, all denials) follows them.
+Next action: none for you right now. Stage 6d and the permissive run are
+done (results below); the grouped HAL launcher is being built and will be
+announced with its command.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -406,7 +406,25 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: init `.rc` scan (read-only, plans a grouped service start)
+## Results: stage 6d with the permissive domain (`real-servicemanager-ywc97a33`)
+
+Operationally tested on the user's M1 (reported by the user, output read):
+- `.rc` scan: 188 files, 196 services; no SELinux-touching line in action
+  blocks (static text only).
+- Permissive run: the whole servicemanager domain produced exactly 2 unique
+  denials, `open` and `map` of the private `/dev/__properties__` (`user_tmp_t`).
+  Both were already known and benign. The temporary module was removed and the
+  label restored. Unconfined processes were not loosened and logged no denials.
+- gsid codes 9-24, sent `fd /proc/self/fd/0 i64 16384`: 7 replied (codes 9, 11,
+  18, 20, 22, 23, 24) and 9 timed out (gsid waits on the absent `vold` service
+  and runs out of binder threads). Code 24 ran real gsid code that failed on the
+  absent `/dev/device-mapper` ("Could not list devices"). No gsid system call on
+  the received memfd except `close`; libbinder again rejected plain reads at the
+  descriptor's position ("protected data in Parcel"). So no gsid method with this
+  layout read the descriptor. Not shown: whether any method with the descriptor
+  in another position reads it.
+
+## Completed scan: init `.rc` files (read-only; `init-rc-tn9de5ou`)
 
 **This step does not modify the image or any system file.** It writes only one
 new `work/asahi/init-rc-*` result directory (a text report). Delete that
@@ -426,7 +444,7 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-init-rc.py
 
 Paste the terminal output.
 
-## Optional: permissive probe domain, one run collects all denials
+## Completed option: permissive probe domain (`--permissive`; used in `real-servicemanager-ywc97a33`)
 
 **THIS STEP MODIFIES STORAGE** (same scope as stages 5 and 6: one new
 `work/asahi/real-servicemanager-*` directory, the temporary `gbos_binder_probe`
@@ -451,7 +469,7 @@ Run it only after the two outputs above are in. Example for the stage 6d probe:
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --permissive --serve-image system_a:/system/bin/gsid --fd-codes 9-24
 ```
 
-## Run now: stage 6d, try `gsid` codes 9 to 24 with the descriptor first
+## Completed command: stage 6d, try `gsid` codes 9 to 24 with the descriptor first
 
 **THIS STEP MODIFIES STORAGE**
 
