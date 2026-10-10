@@ -10,9 +10,10 @@ Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: retry the corrected Android Parcel probe below. The first attempt
-stopped at input preparation before Android execution. Retain the completed native object/FD and Android
-empty-list results; those probes do not need to be rerun.
+Next action: diagnose why the Android client rejected the scoped service
+lookup reply (second Parcel attempt below). Retain the completed native object/FD
+and Android empty-list results; do not rerun them. Do not rerun the Parcel probe
+until the lookup-reply layout is understood; the same command will stop the same way.
 
 ## One command: Android returned object and outgoing FD Parcel
 
@@ -128,6 +129,34 @@ The corrected launcher supplies the read-only sealed fixture on client stdin
 and removes the unsupported input bind mount. The command above pulls this
 fix and creates a new result directory. Android object/FD execution and wire
 compatibility remain pending; keep this failed run as provenance.
+
+### Second Android Parcel attempt: lookup reply not accepted by the client
+
+Reported by the user from `work/asahi/android-parcel-probe-u9mgoinu` (pasted
+report/summary/trace tail; the HTTP listing is not reachable from the cloud
+session). Build exit 0; Binder protocol 8, page size 16384; memfd context
+`user_tmp_t` matched the policy.
+
+- The stdin input worked: `PARCEL_INPUT=READY` and `STUB_READY_PROPERTY=CREATED`.
+  The earlier `Invalid argument` bind-mount failure is resolved.
+- The image `service` client ran under the extracted linker, opened the private
+  `/dev/binder`, and reached the native endpoint: a `_NTF` interface-descriptor
+  request (code 1599098439) and a code 4 request of 100 bytes containing the
+  `android.os.IServiceManager` token and `gbos.parcel`. The endpoint accepted
+  the layout and submitted its `PARCEL_LOOKUP_REPLY`.
+- The client then printed `service: Service gbos.parcel does not exist` and
+  exited 10. No further Binder request reached the endpoint, so no FD call was
+  made. `ANDROID_OBJECT_READ`, `ANDROID_FD_WRITE`, `PARCEL_ENDPOINT_REPLY` and
+  `ANDROID_PARCEL` were not reached; `android_receipt_verified: false`.
+- Not established: whether code 4 is the intended checkService2 in this Android 17
+  image, or why the client treated the reply as null. The reply layout (status,
+  union tag 0, sized ServiceWithMetadata with binder, stability 12, lazy 1) is
+  unverified against this image. Observed noise, not yet linked to the failure:
+  missing `/linkerconfig/ld.config.txt`, rejected `PR_SET_VMA` names, no logd
+  socket, trace_marker EACCES.
+- Cleanup: executable context restore and module removal exit 0; recent AVC
+  query `<no matches>`. No manual cleanup is needed. Keep this directory as
+  provenance.
 
 ## Completed native Binder object/FD milestone
 
