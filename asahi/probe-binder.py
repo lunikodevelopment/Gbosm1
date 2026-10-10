@@ -197,8 +197,10 @@ def main():
                                     'Object/FD transfer, complete namespaces, VINTF, HALs and graphics remain untested.']
             if args.android_parcel:
                 result['android_call'] = {'service': 'gbos.parcel', 'code': 5658,
-                                          'arguments': ['i32', '5658', 'fd', '/dev/gbos-parcel-input'],
+                                          'arguments': ['i32', '5658', 'fd', '/proc/self/fd/0'],
+                                          'input': 'sealed read-only memfd on client stdin only; created after server fork',
                                           'receipt_words': ['47504231', '00004000']}
+                result['android_receipt_verified'] = False
                 result['limitations'] = ['Image service CLI decodes/calls one returned Binder object and serializes an outgoing FD; native endpoint verifies the file.',
                                         'Android FD receipt/readback, Android local Binder object export, complete lifetimes, DMA-BUF/fences and real servicemanager/HALs remain untested.',
                                         'Readiness property, service lookup metadata and interface are private fixtures for this endpoint, not Android boot or service registration.']
@@ -308,11 +310,16 @@ def main():
         marker = ('ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
                   else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS')
         output = result['execution']['stdout']
+        if result['execution']['returncode']:
+            detail = result['execution']['stderr'].strip() or 'retain stdout and trace diagnostics'
+            raise RuntimeError(f'private Binder execution exited {result["execution"]["returncode"]}: {detail}')
         if args.android_parcel:
             actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
             if not actual or type_of(actual[1]) != memfd_type:
                 raise RuntimeError('Android Parcel memfd type differs from the scoped policy type')
             client_path = Path(result['android_runtime']['runtime']) / 'parcel-client.stdout'
+            if not client_path.is_file():
+                raise RuntimeError('Android Parcel client output unavailable despite successful launcher exit')
             if client_path.stat().st_size > 65536:
                 raise RuntimeError('Android Parcel client output exceeds 64 KiB limit')
             client_output = client_path.read_text(errors='replace')
