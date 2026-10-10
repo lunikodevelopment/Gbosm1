@@ -30,7 +30,7 @@ spec.loader.exec_module(base)
 
 PRELUDE = base.SCRIPT[:base.SCRIPT.index('say "S0')]
 
-SCRIPT = PRELUDE + r'''ZYG="$8"; WAIT="${9:-60}"
+SCRIPT = PRELUDE + r'''ZYG="$8"; WAIT="${9:-60}"; SS="${10:-}"
 say "S0 property area"
 "$PY" "$PROPS" "$ROOT" "$ROOT/dev/__properties__" logd.ready=true servicemanager.ready=true apexd.status=ready \
   ro.logd.auditd=false ro.logd.kernel=false ro.boottime.init=1 sys.boot_completed=0 ro.zygote=zygote64 2>&1 | cut -c1-300
@@ -58,7 +58,7 @@ echo "classpath variables: $(printf '%s ' "${CPENV[@]%%=*}")"
 say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
 if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network' -o "$OUT/zygote.trace"); else TR=(); fi
-"${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" > "$OUT/zygote.out" 2>&1 &
+"${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
 ZPID=$!
 for i in $(seq 1 "$WAIT"); do kill -0 "$ZPID" 2>/dev/null || break; sleep 1; done
 if kill -0 "$ZPID" 2>/dev/null; then echo "zygote STILL RUNNING after ${WAIT}s"; else wait "$ZPID"; echo "zygote EXITED, status $?"; fi
@@ -66,7 +66,7 @@ echo "--- zygote stdout/stderr (first 30):"; head -n 30 "$OUT/zygote.out" | cut 
 echo "--- zygote socket:"; ls -l "$ROOT/dev/socket" 2>&1 | cut -c1-120
 echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf '%s %s\n' "${p##*/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
 echo "--- logcat -d, last 40 (zygote, ART, libc, DEBUG):"
-timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | grep -v -E 'derive_classpath' | tail -n 40 | cut -c1-260
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | grep -v -E 'derive_classpath|CompatibilityRules|Resources:|nativeloader: (Load|Configuring)|ApplicationLoaders' | tail -n 60 | cut -c1-260
 if [ -s "$OUT/zygote.trace" ]; then
   echo "--- failed file/network calls in the trace, distinct (first 30):"
   grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
@@ -82,7 +82,8 @@ def launch_zygote(root, env_items):
     os.chdir("/")
     sockets = Path("/dev/socket")
     sockets.mkdir(parents=True, exist_ok=True)
-    env = dict(item.split("=", 1) for item in env_items)
+    flags = [item for item in env_items if item.startswith("--")]
+    env = dict(item.split("=", 1) for item in env_items if not item.startswith("--"))
     keep = []
     for name in ("zygote", "usap_pool_primary"):  # init.zygote64.rc declares both: stream 660 root system
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -92,7 +93,7 @@ def launch_zygote(root, env_items):
         os.set_inheritable(s.fileno(), True)
         keep.append(s)
         env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
-    argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote", "--socket-name=zygote"]
+    argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote", "--socket-name=zygote"] + flags
     os.execve("/system/bin/app_process64", argv, env)
 
 
@@ -101,7 +102,8 @@ def main():
         launch_zygote(sys.argv[2], sys.argv[3:])
     if os.geteuid() == 0:
         sys.exit("run as your ordinary user, without sudo")
-    print("=== BRING-UP THREAD, STAGE B4: ZYGOTE PRELOAD WITHOUT SYSTEM_SERVER (paste in the \"Remaining steps to boot Android\" thread) ===")
+    system_server = "--system-server" in sys.argv[1:]
+    print("=== BRING-UP THREAD, STAGE " + ("B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")
@@ -120,7 +122,7 @@ def main():
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
                "bash", str(script), str(root), str(out), shutil.which("python3") or "python3",
                str((HERE / "smoke-logd-art.py")), str(HERE / "make-property-area.py"),
-               str(HERE / "elf-needed.py"), str(HERE / "make-apex-info-list.py"), str(Path(__file__).resolve()), "30"]
+               str(HERE / "elf-needed.py"), str(HERE / "make-apex-info-list.py"), str(Path(__file__).resolve()), "45", "--start-system-server" if system_server else ""]
     done = subprocess.run(command, capture_output=True, text=True, timeout=900)
     text = done.stdout + done.stderr
     (out / "log.txt").write_text(text)

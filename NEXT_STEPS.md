@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B4e", below) and paste its output.
+bring-up stage B5a", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -774,25 +774,39 @@ Operationally tested on the M1:
   namespace root). The SIGSEGV lines at the end of the trace are shutdown noise
   after the exception, not a separate failure.
 
-## Next action: bring-up stage B4e, zygote with both init sockets
+## Results: bring-up stage B4e (`root-smoke-s_tm2egf`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4d: the
+- **The image's zygote runs and listens** (operationally tested in the sandbox,
+  no binder, no SELinux): `app_process64 -Xzygote --zygote` stayed alive for the whole
+  30 seconds as `zygote64`, preloaded classes, resources (63 + 41), shared libraries
+  and the compat config, and logged `Accepting command socket connections`. The trace
+  shows `listen` on both passed sockets. `/dev/socket/zygote` and `usap_pool_primary`
+  exist.
+- Harmless misses as before (`/data/resource-cache`, `/mnt/expand`, cpu sysfs,
+  `statsdw`, cgroup and task-profile files under `/vendor` and `/system_ext`).
+- Not yet tested: a client connecting to the zygote socket, forking apps, and
+  `system_server`.
+
+## Next action: bring-up stage B5a, zygote with --start-system-server (expected to fail at binder; the failure point is the result)
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4e: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
-printed directory. No sudo, no SELinux module, no binder, no partition, boot or
-flash change.
+printed directory. No sudo, no SELinux module, no binder device, no partition, boot
+or flash change.
 
-What changes: the launcher also creates `/dev/socket/usap_pool_primary` and passes
-it as `ANDROID_SOCKET_usap_pool_primary`. The wait is 30 seconds. If zygote now
-stays alive, the result is "zygote STILL RUNNING" with the sockets listed, which
-means it reached its accept loop; still no `--start-system_server`, because
-system_server needs binder and servicemanager (the later stage).
+What it does: the same run as B4e for 45 seconds, but zygote is started with
+`--start-system-server`, so it forks `system_server` (uid 1000 inside the namespace,
+mapped to an unprivileged host id) on `SYSTEMSERVERCLASSPATH`. There is no
+`/dev/binder` and no `servicemanager` in this sandbox, so `system_server` is expected
+to stop at its first binder use. The point is to learn how far it gets and what it
+needs next (the log tail now hides preload noise and shows 60 lines).
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B4`. Paste only the command output
+Its first line reads `=== BRING-UP THREAD, STAGE B5a`. Paste only the command output
 (not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
