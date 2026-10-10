@@ -2689,6 +2689,17 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-gralloc-service.sh
 ```
 
+Fourth run (the user's paste of `gralloc-build-GzbKXEId`, reported): the object
+list shows every minigbm source built three times (`x.o`, `x.pic.o`,
+`x.pie.o`), which is why name-based deduplication still left duplicates. The
+script now links only the `.pic.o` files (suitable for both the executable and
+the shared mapper), no mock/test. Rerun:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-gralloc-service.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation
