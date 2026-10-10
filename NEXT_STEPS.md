@@ -4,15 +4,16 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: Bionic Toybox execution, native Binder echo, Android libbinder's
+Current status: the image's real servicemanager started and became context
+manager in the private root (stage 5a, below). Earlier: Bionic Toybox execution, native Binder echo, Android libbinder's
 empty-list request/reply, native Binder object/FD transfer, and the Android
 returned-object plus outgoing-FD Parcel probe all passed on Fedora Asahi
 ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: rerun the one command under "Run now: real servicemanager first
-run (stage 5a)" (two audited SELinux permissions are added), then say **get logs**.
+Next action: waiting for the user's go-ahead to build stage 5b (the image's
+`service list` against the real servicemanager). No command is queued.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -270,6 +271,42 @@ Change: exactly those two permissions are added to the temporary module for
 this mode (`user_tmp_t` dir search/getattr and `fs_t` filesystem getattr), on
 `gbos_binder_probe_t` only. The run still enforces SELinux; any further denial is
 again reported rather than widened blindly.
+
+### Fifth 5a run: the real servicemanager started (milestone)
+
+Reported by the user (`work/asahi/real-servicemanager-hjx_37m8`; launcher exit 0,
+cleanup codes 0). Reported facts from its strace and stderr:
+
+- `SERVICEMANAGER_OBSERVED=still running after six seconds`; it ended only when
+  the launcher sent SIGTERM (`killed by SIGTERM`).
+- It read `/system/etc/selinux/plat_service_contexts` and
+  `/vendor/etc/selinux/vendor_service_contexts` (logged "SELinux: Loaded service
+  context from:") and the VINTF manifests (logged "Multiple same specifications
+  for ..." for a few interfaces, which are log lines in the trace, not failures).
+- `ioctl(/dev/binder, BINDER_SET_CONTEXT_MGR_EXT) = 0`: **it became context
+  manager** of the private Binder device. It then created an epoll loop on the
+  Binder fd and a 5-second timer.
+- SELinux: it looked up `/sys/fs/selinux/class/service_manager/index` (ENOENT),
+  logged "Unknown class service_manager", and read `deny_unknown` (0). This is
+  the Android-class check the plan feared, and it did not stop startup. Whether
+  an actual add/find/list check is then allowed is still untested.
+- Missing but non-fatal so far: `/dev/socket/property_service` (ENOENT; libc
+  logged "Using old property service protocol"), `/dev/socket/logdw` (logd),
+  `/dev/socket/traced_producer` (perfetto retries), `/linkerconfig/ld.config.txt`
+  (linker default namespaces).
+- The five AVC denials printed at the end are the **previous** run's (their
+  timestamps, 21:42:39, are before this run's 21:43:34; the AVC query window
+  overlaps). I read no new denial in this run's output, but the query does not
+  separate runs, so treat that as unconfirmed until the query is bounded.
+
+What this establishes: the unmodified image `servicemanager` runs under the
+extracted Android linker in the dedicated domain, with Fedora SELinux
+enforcing, and takes the context-manager role. It does not yet establish that
+it serves any request: no client has talked to it.
+
+Next (needs the user's go-ahead, since it adds a new client path): run the
+image's own `service list` against it. An answer listing zero services would be
+the first Android-to-Android Binder exchange in this setup.
 
 ## Run now: real servicemanager first run (stage 5a)
 
