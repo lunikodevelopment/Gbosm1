@@ -1,0 +1,19 @@
+; Original project policy for a native Binder echo server only.
+; No automatic transitions and no permissive/unconfined domain attribute.
+(type gbos_binder_probe_t)
+(type gbos_binder_probe_exec_t)
+(typeattributeset domain (gbos_binder_probe_t))
+(typeattributeset file_type (gbos_binder_probe_exec_t))
+(typeattributeset exec_type (gbos_binder_probe_exec_t))
+(roletype unconfined_r gbos_binder_probe_t)
+(allow unconfined_t gbos_binder_probe_exec_t (file (read open execute map getattr)))
+(allow unconfined_t gbos_binder_probe_t (process (transition siginh rlimitinh signal sigkill sigstop)))
+(allow gbos_binder_probe_t unconfined_t (process (sigchld)))
+(allow gbos_binder_probe_t unconfined_t (fd (use)))
+(allow gbos_binder_probe_t unconfined_t (fifo_file (write getattr)))
+(allow gbos_binder_probe_t gbos_binder_probe_exec_t (file (entrypoint read open execute map getattr)))
+(allow gbos_binder_probe_t gbos_binder_probe_t (binder (set_context_mgr)))
+(allow unconfined_t gbos_binder_probe_t (binder (call)))
+(allow gbos_binder_probe_t unconfined_t (binder (call)))
+; Device, library, ancestor-directory and inherited-log rules are appended
+; using types read from actual target file contexts. No blanket type attributes.
