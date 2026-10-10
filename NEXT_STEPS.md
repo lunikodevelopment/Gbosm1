@@ -2407,6 +2407,19 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-hidl-gen-host.sh
 ```
 
+First run (reported): `openssl-devel` and `jsoncpp-devel` installed (dnf also
+upgraded `openssl-libs` 3.5.8 to 3.5.9 as a dependency). Compile failed on
+`utils/Errors.h` (libutils include path missing), `uint8_t` in `hidl-hash/Hash.h`
+(missing `<cstdint>`), headers named without their subdirectory
+(`Formatter.h`, `FQName.h`) and `metadata/test.cpp` (a test, needs gmock). The
+script now adds the libutils path, `-include cstdint`, every header directory
+of the tool and skips test sources. Rerun without the dnf line:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-hidl-gen-host.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3l, HIDL and gralloctypes dependencies

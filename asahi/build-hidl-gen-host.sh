@@ -40,7 +40,7 @@ echo '== Sources: top level plus utils, host_utils, hashing, metadata'
 {
     for f in "$H"/*.cpp; do echo "$f hidl_$(basename "${f%.cpp}")"; done
     for d in utils host_utils hashing metadata; do
-        for f in "$H"/$d/*.cpp; do [[ -e $f ]] && echo "$f hidl_${d}_$(basename "${f%.cpp}")"; done
+        for f in "$H"/$d/*.cpp; do [[ -e $f && $f != */test.cpp && $f != *_test.cpp ]] && echo "$f hidl_${d}_$(basename "${f%.cpp}")"; done
     done
     for s in hidl-gen_y hidl-gen_l; do echo "$OUT/gen-parser/$s.cpp gen_$s"; done
     for s in abi_compatibility chrono_utils cmsg file hex logging mapped_file parsebool parsenetaddress posix_strerror_r process result stringprintf strings threads errors_unix; do
@@ -48,8 +48,9 @@ echo '== Sources: top level plus utils, host_utils, hashing, metadata'
     echo "$ROOT/asahi/liblog-host-shim.cpp shim_liblog"
 } > "$OUT/units.txt"
 echo "units: $(wc -l < "$OUT/units.txt")"
-IFL=; for d in $(find "$H" -type d -name include -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*'); do IFL="$IFL -I$d"; done
-FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$H -I$OUT/gen-parser $IFL -I$B/include -I$SRC/system_logging/liblog/include -I/usr/include/jsoncpp"
+# Soong exports each library's include dirs; here every directory that holds a header goes on the path.
+IFL=; for d in $(find "$H" -name '*.h' -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*' -printf '%h\n' | sort -u); do IFL="$IFL -I$d"; done
+FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -include cstdint -I$H -I$OUT/gen-parser $IFL -I$B/include -I$SRC/system_logging/liblog/include -I$SRC/system_core/libutils/include -I/usr/include/jsoncpp"
 export OUT FLAGS
 echo '== Compile (parallel)'
 xargs -P "$(nproc)" -L1 bash -c 'clang++ $FLAGS -c "$0" -o "$OUT/obj/$1.o" >"$OUT/obj/$1.log" 2>&1 || echo "FAILED $1"' < "$OUT/units.txt"
