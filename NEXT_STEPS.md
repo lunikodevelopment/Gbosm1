@@ -2139,19 +2139,19 @@ patched source copied and libdrm was found, but every compile step failed with
 compiles with `-Werror`, and my `CC` carried a linker-only option. The script
 now adds `-Qunused-arguments`. Nothing was built.
 
-The first stage 3d run also left minigbm's build output in the checkout root
-(`*.o`, `*.o.depends`, `*.pic.d`, `*.pic.o`, `*.pie.d`, `*.pie.o`, `gbm.pc`,
-`.dont_delete_on_clean`, all untracked). `artifacts/` also shows as untracked;
-it is not part of that output as far as I can tell, so leave it alone. Preview
-what would be removed (nothing is deleted by this command), then remove it:
-
-```bash
-cd ~/Gbosm1 && git clean -n -- ':(glob)*.o' ':(glob)*.o.depends' ':(glob)*.pic.d' ':(glob)*.pic.o' ':(glob)*.pie.d' ':(glob)*.pie.o' gbm.pc .dont_delete_on_clean
-```
-
-If the preview lists only those files, run the same command with `-f` in place
-of `-n`, then confirm with `git status --short` (only `artifacts/` should
-remain, if it was there before). Then:
+Second run (reported by the user, `work/asahi/minigbm-bionic-suJA3aqq`): the
+checkout-root build files from the first stage 3d run were removed with `git
+clean` (only `*.o`, `*.o.depends`, `*.pic.d`, `*.pic.o`, `*.pie.d`, `*.pie.o`,
+`gbm.pc` and `.dont_delete_on_clean`; `artifacts/` was left alone). With
+`-Qunused-arguments` the compiler now reads the sources, and stops at
+`drv.c: 'cutils/log.h' file not found` and `drv_helpers.c: 'cutils/properties.h'
+file not found`: minigbm's Android code paths use libcutils headers, which are
+not in the NDK sysroot. `asahi/android-shims/` adds two small original headers
+(`__android_log_print` for logging, `__system_property_get` for properties; see
+its README) and the script now passes `-I` for them. It also prints the
+Android-specific includes and calls found in the sources, and runs `make -k`
+serially so one run lists every remaining error instead of the first. More
+missing headers are possible; the printed list is what I will work from.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only

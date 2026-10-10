@@ -35,16 +35,20 @@ echo "Patched source: $PATCHED/minigbm"
 echo "libdrm headers: $LIBDRM_SRC ; library: $LIBDRM_SO"
 cp -a "$PATCHED/minigbm" "$OUT/minigbm"
 TOOL="clang --target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -resource-dir=$HK/clang-resource -fuse-ld=lld -Wl,-z,max-page-size=16384"
-INC="-I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm"
+INC="-I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm -I$ROOT/asahi/android-shims"
 
-echo '== Build libminigbm for Android (make)'
+echo '== Android-specific includes and calls in the minigbm sources (to size the shim work)'
+(cd "$OUT/minigbm" && grep -n -E '^#\s*include\s*<(cutils|android|log|hardware|system|utils|sync|vndk|sys/system_properties)' *.c *.h cros_gralloc/*.c cros_gralloc/*.cc 2>/dev/null | head -40
+ echo '-- identifiers:'; grep -ohE '\b(ALOG[A-Z_]*|LOG_[A-Z_]+|property_[a-z0-9_]+|__android_[a-z_]+|__system_property_[a-z_]+|sync_[a-z_]+)\b' *.c *.h 2>/dev/null | sort | uniq -c)
+echo '== Build libminigbm for Android (make -k, serial so errors stay readable)'
 # Flags go inside CC: variables given on the make command line would replace the Makefile's own += flags.
 # PKG_CONFIG=true makes every pkg-config probe in the Makefile print nothing, so no host paths leak in.
 # -Qunused-arguments: common.mk compiles with -Werror, and clang flags the linker-only -Wl option on compile steps.
-if (cd "$OUT/minigbm" && make -j4 OUT="$OUT/minigbm-build" CC="$TOOL -Qunused-arguments" PKG_CONFIG=true \
+if (cd "$OUT/minigbm" && make -k OUT="$OUT/minigbm-build" CC="$TOOL -Qunused-arguments" PKG_CONFIG=true \
         PC_CFLAGS="$INC" PC_LIBS="-L$(dirname "$LIBDRM_SO") -ldrm") >"$OUT/make.log" 2>&1; then
     echo 'make exit status: 0'; else echo "make exit status: $?"; fi
-tail -30 "$OUT/make.log"
+grep -E 'error|Error' "$OUT/make.log" | sort -u | head -40
+tail -8 "$OUT/make.log"
 LIB=$(find "$OUT/minigbm-build" "$OUT/minigbm" -name 'libminigbm.so*' -type f 2>/dev/null | head -1)
 [[ -n $LIB ]] || { echo "Stopped: no libminigbm built. Send $OUT/report.txt"; exit 1; }
 echo "Built: $LIB"
