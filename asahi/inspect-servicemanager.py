@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Read-only static look at the image's servicemanager; executes nothing.
+"""Read-only static look at one system_a file (default: servicemanager); executes nothing.
 
-Copies /system/bin/servicemanager (size-limited) into a new report directory,
+Copies the file (size-limited) into a new report directory,
 prints its DT_NEEDED libraries and selected strings. Strings are hints only.
 """
 import argparse
@@ -20,6 +20,7 @@ HINTS = re.compile(rb"(servicemanager|ctl\.|selinux|ready|dump|vintf|perfetto|la
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--path", default="/system/bin/servicemanager", help="absolute system_a path of one ELF file")
     p.add_argument("--previous", help="completed recovery-audit directory (default: latest)")
     args = p.parse_args()
     if os.geteuid() == 0:
@@ -52,11 +53,12 @@ def main():
     parent.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix="servicemanager-inspect-", dir=parent)).resolve()
     print(f"Results: {out}")
-    r = subprocess.run(["dump.erofs", f"--offset={extents[0]['offset']}", "--path=/system/bin/servicemanager",
+    print(f"File: system_a:{args.path}")
+    r = subprocess.run(["dump.erofs", f"--offset={extents[0]['offset']}", f"--path={args.path}",
                         "--cat", str(image)], capture_output=True, timeout=120)
     if r.returncode or len(r.stdout) > LIMIT:
-        raise SystemExit("could not read servicemanager within the size limit")
-    binary = out / "servicemanager"
+        raise SystemExit("could not read the file within the size limit")
+    binary = out / Path(args.path).name
     binary.write_bytes(r.stdout)
     info = helpers.elf_info(r.stdout)
     print("machine=%s aligned_16k=%s size=%d" % (info["machine"], info["aligned_16k"], len(r.stdout)))

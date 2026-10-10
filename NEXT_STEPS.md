@@ -11,9 +11,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the read-only host SELinux facts check below. It decides
-whether the real-servicemanager plan can continue. The plan follows it. Retain
-all earlier results; no completed probe needs rerunning.
+Next action: run the stage 2 libselinux read-only check below (plan stages in
+the plan section). Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
 
@@ -54,17 +53,33 @@ policy changes would use the same temporary, removable module as earlier probes.
    transaction FD, but nothing observable shows it reading FD data. Decide after
    stage 5 whether another Android service is worth a probe.
 
-### One command: host SELinux facts (read-only)
+### Result: host SELinux facts (stage 1 done)
 
-No storage is modified and nothing is installed. On the M1:
+Reported by the user: `Enforcing`, `deny_unknown=0`, `reject_unknown=0`,
+`policyvers=35`, 134 object classes, and of the Android-relevant names only
+`binder` exists (`service_manager`, `hwservice_manager` and `property_service` do
+not). So the host kernel does not deny unknown classes (it allows them).
+Hypothesis, recalled from upstream libselinux and not yet checked in the
+image's libselinux: `selinux_check_access` returns success for an unknown class
+when `deny_unknown` is 0, which would let the image's servicemanager pass its
+service checks without Android labels. Stage 2 must confirm this against the
+image's own libselinux before any run.
+
+### One command: read the image's libselinux check (stage 2, read-only)
+
+**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+
+Scope: creates one new `work/asahi/servicemanager-inspect-*` directory with a
+copy of `/system/lib64/libselinux.so` (size-limited), a strings-hints file and
+`summary.json`; the image is only read, nothing is executed. Reversal: delete the
+newly printed result directory. The script gained a `--path` option (still
+read-only).
 
 ```bash
-getenforce; for f in deny_unknown reject_unknown policyvers; do printf '%s=' $f; cat /sys/fs/selinux/$f; echo; done; ls /sys/fs/selinux/class 2>/dev/null | grep -c . ; ls /sys/fs/selinux/class | grep -E '^(service_manager|hwservice_manager|binder|property_service)$'
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/inspect-servicemanager.py --path /system/lib64/libselinux.so | tee /tmp/libselinux-inspect.txt | grep -E '^(Results|File|machine|DT_NEEDED)|STR .*(service_contexts|/system/|/vendor/|unknown|deny)' ; d=$(grep '^Results:' /tmp/libselinux-inspect.txt | cut -d' ' -f2); a=$(nm -D --defined-only "$d/libselinux.so" | awk '$3=="selinux_check_access"{print $1}'); echo "selinux_check_access=$a"; [ -n "$a" ] && objdump -d --no-show-raw-insn --start-address=0x$a --stop-address=$(printf '0x%x' $((0x$a + 0x180))) "$d/libselinux.so" | head -150
 ```
 
-Say **get logs** with the output. `deny_unknown=0` would mean unknown classes
-are allowed by the kernel; `1` would mean denied. Either is only a fact until
-stage 2 shows how the image's code reacts.
+Say **get logs** with the output. If `selinux_check_access=` is empty, say so.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
