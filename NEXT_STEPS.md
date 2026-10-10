@@ -11,9 +11,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: real servicemanager first
-run (stage 5a)" below, then say **get logs**. It starts only the image's own
-`servicemanager`, no client.
+Next action: run the one diagnostic under "First 5a run result" (it explains the
+`/usr` bind failure; creates and removes one empty temporary directory), then say
+**get logs** or paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -190,6 +190,27 @@ Not yet built or run; this is the plan for stages 4-5.
   with an explicit scope statement is the only tool used.
 
 Stage 5a is now built (go-ahead given); its command is under "Run now" above.
+
+## First 5a run result: private-root `/usr` bind mount failed
+
+Reported by the user (`work/asahi/real-servicemanager-cbv6o_kt`): extraction,
+build, policy install and label all succeeded; all 12 libraries resolved (none
+unresolved), 4 service-context files and the VINTF manifests were copied.
+The launcher then stopped with `.../sm-root/usr: Invalid argument` when
+bind-mounting `/usr` into the private root, so **servicemanager was never
+started**. Cleanup codes were 0 (label restored, module removed); the AVC query
+returned `<no matches>`. No SELinux denial was involved. The cause of the
+`EINVAL` is not known; I will not guess a fix.
+
+Read-only diagnostic (only an empty temporary directory under `work/asahi`,
+removed at the end; no policy or label change):
+
+```bash
+cd ~/Gbosm1 && findmnt -o TARGET,PROPAGATION,FSTYPE,OPTIONS -T /usr; d=$(mktemp -d work/asahi/bindtest-XXXXXX); mkdir "$d/usr" "$d/lib64"; unshare --user --map-root-user --mount --propagation private sh -c "mount --bind /usr '$d/usr' && echo USR_BIND_OK || echo USR_BIND_FAIL; mount --bind /usr/lib64 '$d/lib64' && echo LIB64_BIND_OK || echo LIB64_BIND_FAIL; grep -E ' /usr | / ' /proc/self/mountinfo" 2>&1; rmdir "$d/usr" "$d/lib64" "$d" 2>/dev/null; true
+```
+
+If `/usr` is not itself a mount point or is marked unbindable, a bind of a
+mount point (or another approach) is the next change; the output decides.
 
 ## Run now: real servicemanager first run (stage 5a)
 
