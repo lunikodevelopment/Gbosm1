@@ -330,6 +330,17 @@ def main():
                 rules += [f'(allow gbos_binder_probe_t {optional["selinuxfs_dir"]} (dir (search getattr)))']
             if optional['null']:
                 rules += [f'(allow gbos_binder_probe_t {optional["null"]} (chr_file (open read write getattr ioctl)))']
+            # Denials from run 4 (work/asahi/real-servicemanager-wsakyux_): search on the private
+            # tmpfs /dev root (labelled like an anonymous memfd, user_tmp_t) and getattr on the
+            # root filesystem (fs_t) for the linker's fstatfs of libbase.so.
+            fd = os.memfd_create('gbos-sm-tmpfs-context', os.MFD_CLOEXEC)
+            try:
+                tmpfs_type = type_of(os.getxattr(fd, 'security.selinux').decode().rstrip('\0'))
+            finally:
+                os.close(fd)
+            result['sm_policy_types']['private_dev_tmpfs'] = tmpfs_type
+            rules += [f'(allow gbos_binder_probe_t {tmpfs_type} (dir (search getattr)))',
+                      '(allow gbos_binder_probe_t fs_t (filesystem (getattr)))']
             if optional['devdir']:
                 rules += [f'(allow gbos_binder_probe_t {optional["devdir"]} (dir (search getattr)))']
         policy = out / 'gbos_binder_probe.cil'

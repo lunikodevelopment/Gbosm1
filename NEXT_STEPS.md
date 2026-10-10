@@ -12,7 +12,7 @@ The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
 Next action: rerun the one command under "Run now: real servicemanager first
-run (stage 5a)" (a launcher argument bug is fixed), then say **get logs**.
+run (stage 5a)" (two audited SELinux permissions are added), then say **get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -245,6 +245,31 @@ image or SELinux: I passed `"runcon"` as an extra argument after the program pat
 in the `strace` command line, so `runcon` took the word `runcon` as a context
 string to parse. Fixed by removing the extra word. Cleanup codes 0, no AVC
 denials; **servicemanager still has not started**.
+
+### Fourth 5a run: the Android linker started and hit SELinux
+
+Reported by the user (`work/asahi/real-servicemanager-wsakyux_`): `runcon` worked,
+the traced chain reached `linker64` running `servicemanager` in
+`gbos_binder_probe_t`, which exited 1 while loading its first library:
+`CANNOT LINK EXECUTABLE ...: unable to fstatfs file for the library "libbase.so":
+Permission denied`. First time Android code of this image has run in the private
+root; `servicemanager` itself has not run yet. The AVC query listed five denials
+for `linker64`, all in the dedicated domain:
+
+- `search` on the private `/dev` tmpfs root (type `user_tmp_t`) three times plus
+  once more (it also blocked `/dev/__properties__` and the log socket path);
+- `getattr` on the root filesystem (`filesystem`, type `fs_t`, the btrfs root),
+  which is the `fstatfs` that failed.
+
+Other things seen and not yet a problem: no `/linkerconfig/ld.config.txt` (the
+linker warned and used its default namespaces), no `/dev/__properties__` yet
+(blocked by the same denial), and `prctl(PR_SET_VMA_ANON_NAME)` returning EINVAL
+(harmless on this kernel as far as shown).
+
+Change: exactly those two permissions are added to the temporary module for
+this mode (`user_tmp_t` dir search/getattr and `fs_t` filesystem getattr), on
+`gbos_binder_probe_t` only. The run still enforces SELinux; any further denial is
+again reported rather than widened blindly.
 
 ## Run now: real servicemanager first run (stage 5a)
 
