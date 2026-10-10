@@ -4,54 +4,55 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: Android Toybox executed through its Android Bionic linker on
-Fedora Asahi ARM64/16 KiB (`BIONIC_UNAME=PASS`, exit 0). Native Honeykrisp
-readback also passed. Qualcomm graphics adaptation remains required.
-Next action: exchange a verified payload over a private Binder device between
-two native Linux processes on the existing Asahi kernel.
+Current status: Bionic Toybox execution passed. The private Binder probe built,
+mounted binderfs, allocated a device and reported protocol 8 on 16 KiB pages,
+but stopped at context-manager registration with `Permission denied`.
+No Binder payload exchange has passed.
+Next action: collect audit denial records and the process security context;
+the permission error alone does not establish its cause.
 
-## One command: private Binder echo milestone
+## One command: Binder denial diagnostics
 
 **THIS STEP MODIFIES STORAGE**
 
-The Git pull updates tracked source files in `~/Gbosm1` on the home filesystem,
-preserving history and stopping on conflicts. Retain local changes.
-The command creates a new `work/asahi/binder-probe-*` directory containing a
-compiled probe, report and logs. Existing files are retained. Possible loss is
-disk space used by these new files and tracked source versions updated by Git.
-Delete only the newly printed result directory to reverse generated files;
-source versions remain recoverable through Git.
+Git updates tracked source files in `~/Gbosm1`, preserving history and stopping
+on conflicts. The command creates only one new `work/asahi/binder-denial-*.log`
+on the home filesystem. Existing reports are retained. Possible loss is disk
+space consumed by the new log and source versions updated by Git. Delete only
+the printed new log to reverse generated writes; source history remains in Git.
 
-During execution it creates new user/mount namespaces and mounts a temporary
-binderfs instance inside them at the new result directory's `binderfs` path.
-Mount propagation is private. It allocates only its own `asahi-echo` Binder
-device and registers its own context manager there. The mount is removed on
-success or when the namespaces exit. The host mount table and existing Binder
-contexts are retained. No persistent system configuration is needed.
-
-Run as `gbos_user`, without sudo:
+Run as `gbos_user`. The `sudo` invocation below only reads existing audit/kernel
+logs; it does not rerun the probe with privilege or modify policy.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py
+cd ~/Gbosm1 && git pull --ff-only && report=$(mktemp work/asahi/binder-denial-XXXXXX.log) && { date -Is; id; id -Z; if command -v ausearch >/dev/null 2>&1; then sudo ausearch -m AVC,USER_AVC -ts today -i; else sudo journalctl -k -b --no-pager; fi; } 2>&1 | tee "$report"; printf 'Diagnostic log: %s\n' "$report"
 ```
 
-The runner uses the existing native C compiler and util-linux `unshare`.
-It builds against installed Linux UAPI headers (`linux/android/binder.h` and
-`linux/android/binderfs.h`); it does not install packages or compile a kernel.
-It checks Binder protocol and maps a driver buffer, then forks an echo server
-and client. The client sends a transaction to handle 0; the server verifies the
-payload and replies; the client verifies the same payload and frees the buffer.
+Keep the HTTP server available at `http://192.168.178.47:8000/work/asahi/`
+and send the printed log name; the reports can be retrieved directly from its
+directory listing. Audit logs may contain unrelated denial events; the relevant
+evidence is the Binder context-manager denial and its source/target security
+contexts. If no matching denial is present, retain the output: absence of a
+record does not establish that SELinux allowed the operation.
 
-Root capabilities exist only inside the newly mapped user namespace. Fedora
-SELinux stays enforced. If namespace creation, binderfs mounting, context-manager
-registration or compilation fails, send the diagnostics; do not add sudo,
-change device permissions or disable enforcement. Execution is bounded by
-alarms and a 30-second runner timeout.
+Do not disable enforcement, change device permissions, install a broad allow
+rule or rerun the Binder probe with sudo from this error alone. Any policy
+development should follow the recorded denial and remain narrowly scoped.
 
-Send `report.txt` and `summary.json` from the printed directory.
-`BINDER_ECHO=PASS` and exit 0 establish native Linux Binder transaction/reply
-operation only. Android libbinder, servicemanager, SELinux integration and HAL
-operation remain untested. This new probe has not yet run on the target.
+## Completed Binder attempt
+
+Retrieved directly from the target HTTP directory listing:
+`/home/gbos_user/Gbosm1/work/asahi/binder-probe-tdbr2cym`.
+
+- Native C build: exit 0, no compiler diagnostics.
+- Private namespace/binderfs and device creation: succeeded; device major 508,
+  minor 4 for this run.
+- Binder protocol: 8; runtime page size: 16384; the server's driver buffer mapping
+  succeeded before context-manager registration.
+- `BINDER_SET_CONTEXT_MGR`: permission denied. Server stopped before readiness;
+  probe exit 1. Client transactions and replies were not attempted.
+- This is a permission failure at the context-manager boundary, not evidence
+  that Binder is absent. The exact enforcement mechanism remains unconfirmed.
 
 ## Completed Bionic execution
 
@@ -93,7 +94,7 @@ User-supplied Fedora output on 10 October 2026 establishes:
 |---|---|---|
 | Running kernel | `7.1.6-400.asahi.fc44.aarch64+16k` | Collector output; installed kernel headers are a separate package. |
 | Runtime page size | 16384 bytes | Confirmed by collector and GPU probe. |
-| Binder IPC / binderfs | Both configured `y`; binder filesystem registered | No Binder nodes reported; transactions remain untested. |
+| Binder IPC / binderfs | Both configured `y`; private binderfs device created, protocol 8 and buffer mapping succeeded | Context-manager registration denied; transactions remain untested. |
 | DMA-BUF / DMA heaps | Configured `y`; system heap node present | Allocation and sharing remain untested. |
 | GPU kernel driver | Asahi module loaded; `renderD128` and `card2` use Asahi | Collector evidence. |
 | Internal display | `apple-drm`, connected eDP, 2560×1600 mode | Enumeration only; Android composition remains untested. |
@@ -128,8 +129,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Establish native Binder transaction/reply operation using the command above,
-   then choose Android libbinder/servicemanager integration from that evidence.
+1. Identify the context-manager permission denial using the diagnostic command
+   above, then establish native Binder transactions before Android integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
