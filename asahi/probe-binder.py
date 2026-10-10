@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run a native Binder echo probe in temporary user/mount namespaces."""
+"""Build and run a scoped Binder probe in temporary user/mount/PID namespaces."""
 import argparse
 from collections import deque
 import datetime
@@ -22,8 +22,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--temporary-policy', action='store_true',
                         help='install a dedicated server policy for this attempt, then remove it')
-    parser.add_argument('--android-service', action='store_true',
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--android-service', action='store_true',
                         help='run the image service list client against a native empty-list stub')
+    mode.add_argument('--object-fd', action='store_true',
+                      help='verify native Binder object calls and a sealed memfd round trip')
     args = parser.parse_args()
     if not args.temporary_policy:
         parser.error('this revision requires --temporary-policy; see NEXT_STEPS.md for scope and reversal')
@@ -44,18 +47,18 @@ def main():
         sys.exit('Requires the previously observed unconfined_r/unconfined_t user context.')
     parent = Path('work/asahi')
     print('THIS STEP MODIFIES STORAGE', flush=True)
-    print('Creates a new work/asahi/binder-probe-* directory containing a native probe and logs.', flush=True)
+    print('Creates a new work/asahi/*binder*-probe-* directory containing a native probe and logs.', flush=True)
     print('Temporarily mounts binderfs only in new user/mount namespaces; namespace exit removes the mount.', flush=True)
     print('Temporarily installs gbos_binder_probe SELinux module and labels only the new probe executable.', flush=True)
     print('Cleanup restores the original executable context and removes only this new policy module.', flush=True)
     print('If interrupted during cleanup: sudo semodule -r gbos_binder_probe; see NEXT_STEPS.md.', flush=True)
     print('Existing files are retained. Delete the new result directory to reverse generated files.', flush=True)
     parent.mkdir(parents=True, exist_ok=True)
-    prefix = 'libbinder-probe-' if args.android_service else 'binder-probe-'
+    prefix = 'libbinder-probe-' if args.android_service else 'binder-transfer-probe-' if args.object_fd else 'binder-probe-'
     out = Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
     mountpoint = out / 'binderfs'
     mountpoint.mkdir()
-    source_name = 'probe-libbinder.c' if args.android_service else 'probe-binder.c'
+    source_name = 'probe-libbinder.c' if args.android_service else 'probe-binder-transfer.c' if args.object_fd else 'probe-binder.c'
     source = Path(__file__).with_name(source_name).resolve()
     binary = out / 'binder-echo'
     lock = (parent / 'binder-policy.lock').open('a')
@@ -167,6 +170,9 @@ def main():
         return data
     try:
         log(f'Results: {out}')
+        if args.object_fd:
+            result['limitations'] = ['Native Linux Binder UAPI object/FD prerequisite only; no Android executable is run in this mode.',
+                                    'One sealed memfd and one returned Binder object; DMA-BUF, fences, death notifications, full object lifetimes, servicemanager and HALs remain untested.']
         if args.android_service:
             cleanup_previous_clients()
             import importlib.util
@@ -241,11 +247,31 @@ def main():
         rules += [f'(allow gbos_binder_probe_t {t} (file (read open execute map getattr)))' for t in sorted(library_types)]
         rules += [f'(allow gbos_binder_probe_t {t} (lnk_file (read getattr)))' for t in sorted(symlink_types)]
         rules += [f'(allow gbos_binder_probe_t {t} (file (write append getattr)))' for t in sorted(log_types)]
+        memfd_type = None
+        if args.object_fd:
+            # Inspect an anonymous file created in the same client domain. No
+            # disk file is created and no transferred-file execute/write rule
+            # is added to the dedicated server domain.
+            fd = os.memfd_create('gbos-binder-transfer-context', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+            try:
+                memfd_context = os.getxattr(fd, 'security.selinux').decode().rstrip('\0')
+            finally:
+                os.close(fd)
+            memfd_type = type_of(memfd_context)
+            result['memfd_context'] = memfd_context
+            log('Observed client memfd context: ' + memfd_context)
+            rules += ['(allow gbos_binder_probe_t unconfined_t (binder (transfer)))',
+                      f'(allow gbos_binder_probe_t {memfd_type} (file (read getattr map)))']
+            # The template already allows gbos_binder_probe_t unconfined_t
+            # fd(use), covering this received file's creator SID.
         policy = out / 'gbos_binder_probe.cil'
         policy.write_text(template + '\n'.join(rules) + '\n')
         result['policy'] = {'device_type': device_type, 'library_types': sorted(library_types),
                             'directory_types': sorted(directory_types), 'log_types': sorted(log_types),
                             'symlink_types': sorted(symlink_types)}
+        if args.object_fd:
+            result['policy']['memfd_type'] = memfd_type
+            result['policy']['object_transfer'] = 'gbos_binder_probe_t -> unconfined_t only'
         modules = run(['sudo', 'semodule', '-l'], 'existing-modules', 60)
         if modules['returncode']:
             raise RuntimeError('cannot inspect policy modules; no installation attempted')
@@ -265,9 +291,20 @@ def main():
                    '--fork', '--kill-child', str(binary), str(mountpoint)]
         if args.android_service:
             command.append(result['android_runtime']['runtime'])
-        result['execution'] = run(command, 'service-list' if args.android_service else 'echo', 40)
-        marker = 'LIBBINDER_LIST=PASS' if args.android_service else 'BINDER_ECHO=PASS'
+        result['execution'] = run(command, 'service-list' if args.android_service else 'transfer' if args.object_fd else 'echo', 40)
+        marker = 'LIBBINDER_LIST=PASS' if args.android_service else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS'
         output = result['execution']['stdout']
+        if args.object_fd:
+            actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
+            if not actual or type_of(actual[1]) != memfd_type:
+                raise RuntimeError('executed memfd type differs from the scoped policy type')
+            required_markers = ('BINDER_FD_SERVER=PASS', 'BINDER_FD_CLIENT=PASS',
+                                'BINDER_OBJECT_SERVER=PASS', 'BINDER_OBJECT_CLIENT=PASS',
+                                'BINDER_TRANSFER_SERVER=PASS', 'BINDER_TRANSFER=PASS')
+            missing = [item for item in required_markers if item not in output]
+            result['missing_markers'] = missing
+            if missing:
+                raise RuntimeError('object/FD probe missing expected evidence: ' + ', '.join(missing))
         if args.android_service:
             required_markers = ('STUB_READY_PROPERTY=CREATED', 'LIBBINDER_STUB_REPLY=PASS',
                                 'Found 0 services:', 'LIBBINDER_LIST=PASS')
