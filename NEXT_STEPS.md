@@ -83,16 +83,37 @@ names carry a version suffix (`@@...`); the lookup, not the library, failed.
 Whether `selinux_check_access` returns success for an unknown class is still
 unconfirmed.
 
-### One command: disassemble selinux_check_access (stage 2, read-only)
+### Stage 2 partial result: selinux_check_access disassembly (first 0x200 bytes)
 
-No storage is modified; it reads the file already copied above. On the M1:
+Reported by the user (image libselinux, `selinux_check_access` at 0xd4e0, ARM64).
+Reading of the code (my interpretation of the disassembly, not run):
+
+- After a one-time init, if an internal enabled flag is not 1 the function
+  returns 0 (allowed) immediately (0xd5f0).
+- Otherwise it converts both context strings, calls `selinux_status_updated`,
+  then `string_to_security_class(class)`. A zero result takes the unknown-class
+  branch (0xd620). That branch saves errno, calls the log callback if one is set,
+  and in one path calls a local helper at 0xe230 and returns 0 when that helper
+  returns 0, else continues at 0xd6e8. In upstream libselinux the equivalent
+  helper is `security_deny_unknown`, which would match `deny_unknown=0`
+  giving "allowed". That identification is a guess from structure: the
+  symbol label shown for 0xe230 is wrong (stripped binary).
+- A known class with an unknown permission goes to a separate branch (0xd658).
+- The disassembly ended at 0xd6dc inside the no-callback path, so the final
+  return value there is not seen.
+
+Conclusion so far: consistent with, but not proof of, the unknown-class check
+passing on this host. One more read-only look settles it.
+
+### One command: finish the selinux_check_access read (stage 2, read-only)
+
+No storage is modified. On the M1:
 
 ```bash
-cd ~/Gbosm1/work/asahi/servicemanager-inspect-4e70qfl1 && a=$(nm -D --defined-only libselinux.so | awk '$3 ~ /^selinux_check_access/ {print $1; exit}'); echo "selinux_check_access=$a"; [ -n "$a" ] && objdump -d --no-show-raw-insn --start-address=0x$a --stop-address=$(printf '0x%x' $((0x$a + 0x200))) libselinux.so | head -180
+cd ~/Gbosm1/work/asahi/servicemanager-inspect-4e70qfl1 && objdump -d --no-show-raw-insn --start-address=0xd6dc --stop-address=0xd780 libselinux.so | tail -n +7 | head -60; echo ----; objdump -d --no-show-raw-insn --start-address=0xe230 --stop-address=0xe2c0 libselinux.so | tail -n +7 | head -60
 ```
 
-Say **get logs** with the output. If the address is still empty, send
-`nm -D --defined-only libselinux.so | grep -i check` instead.
+Say **get logs** with the output.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
