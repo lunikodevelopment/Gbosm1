@@ -5,15 +5,16 @@ and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
 Current status: the image's real servicemanager started and became context
-manager in the private root (stage 5a, below). Earlier: Bionic Toybox execution, native Binder echo, Android libbinder's
+manager in the private root (stage 5a), and the image's own `service list`
+got an answer from it over Binder (stage 5b, below). Earlier: Bionic Toybox execution, native Binder echo, Android libbinder's
 empty-list request/reply, native Binder object/FD transfer, and the Android
 returned-object plus outgoing-FD Parcel probe all passed on Fedora Asahi
 ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 5b" below, then say
-**get logs**.
+Next action: none for you yet. Stage 5b passed (see "Third 5b run" below); the
+next stage is proposed there and waits for your go-ahead.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -340,7 +341,7 @@ earlier Android probes used, just before starting the client. This is a stand-in
 for the property service, not Android init, and it is stated here so a pass is
 not read as more than it is.
 
-## Run now: stage 5b, the image's `service list` against the real servicemanager
+## Completed command: stage 5b, the image's `service list` against the real servicemanager (passed on the third run)
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -372,6 +373,36 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-p
 
 The runner prints `SERVICE_LIST_FOUND=`, the client output and both trace tails.
 After it finishes, say **get logs**.
+
+### Third 5b run: the real servicemanager answered `service list` (milestone)
+
+Reported by the user (`work/asahi/real-servicemanager-fx76zo2f`): `STUB_READY_PROPERTY=CREATED`,
+`LIST_CLIENT=exit status 0`, `SERVICEMANAGER_OBSERVED=still running after six
+seconds`, `SERVICE_LIST_FOUND=1`, client output `Found 1 services:` / `0 manager: []`.
+Cleanup: restore-context 0, policy-remove 0. The client trace shows
+`BINDER_WRITE_READ` exchanges and the `writev` of that output; the server trace
+shows two reads of "Unknown class service_manager" answered under `deny_unknown`=0.
+
+Facts, by kind:
+- Operationally tested: the image's `servicemanager` and the image's `service`
+  (both under the extracted Android linker) exchanged Binder transactions on a
+  private binderfs device with Fedora SELinux enforcing; the only registered
+  service is `manager`, the servicemanager itself.
+- Reported but not a pass criterion: three new AVC denials in this run (timestamps
+  21:51:13-21:51:15, after the run's start): `{ open }` on `/dev/__properties__`
+  (`user_tmp_t` file, twice, domain `gbos_binder_probe_t`, the server) and
+  `{ transfer }` on binder from `gbos_binder_probe_t` to `unconfined_t`. They did
+  not stop the run. Earlier-listed denials in the runner output are stale
+  (older timestamps) and not from this run.
+- Limits: the property file is my stand-in for Android's property service, not
+  init; access checks are not enforced in any Android sense (unknown class,
+  allowed by `deny_unknown`); no service other than `manager` was exercised.
+
+Proposed next stage (not started, needs your go-ahead): a native endpoint
+registers itself through the real `addService`, and the earlier Parcel client
+looks it up through the real servicemanager, which tests object return against
+the real server. The two denials above would be handled in that change only if
+they block it; stage 6 (Android receiving a file descriptor) follows separately.
 
 ## Run now: real servicemanager first run (stage 5a)
 
