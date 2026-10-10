@@ -157,7 +157,7 @@ static void list_server(const char *path, int ready) {
 }
 #else
 static void parcel_server(const char *path, int ready);
-static void parcel_setup_input(void);
+static int parcel_setup_input(void);
 #endif
 int main(int argc, char **argv) {
     if (signal(SIGALRM, timeout_exit) == SIG_ERR) fail("install alarm handler");
@@ -211,7 +211,7 @@ int main(int argc, char **argv) {
     close(ready[1]); char token;
     require(read(ready[0], &token, 1) == 1 && token == 'R', "stub stopped before readiness"); close(ready[0]);
 #ifdef GBOS_PARCEL_MODE
-    parcel_setup_input();
+    int parcel_input = parcel_setup_input();
 #endif
     stub_ready_property();
     pid_t client_pid = fork(); if (client_pid < 0) fail("fork Android client");
@@ -220,13 +220,15 @@ int main(int argc, char **argv) {
         require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) <
                 (int)sizeof(library_env), "library environment too long");
 #ifdef GBOS_PARCEL_MODE
+        if (dup2(parcel_input, STDIN_FILENO) < 0) fail("install client read-only Parcel stdin");
+        if (close(parcel_input)) fail("close client Parcel input duplicate");
         char output_path[4096]; PATH_JOIN(output_path, argv[2], "parcel-client.stdout");
         int output = open(output_path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
         if (output < 0 || dup2(output, STDOUT_FILENO) < 0) fail("redirect Android Parcel output");
         close(output);
         execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160",
               "-o", trace, "-E", library_env, linker, client, "call", "gbos.parcel", "5658",
-              "i32", "5658", "fd", "/dev/gbos-parcel-input", (char *)NULL);
+              "i32", "5658", "fd", "/proc/self/fd/0", (char *)NULL);
 #else
         puts("Starting Android service list under client-only syscall tracing.");
         execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160",
@@ -234,14 +236,14 @@ int main(int argc, char **argv) {
 #endif
         fail("execute traced Android service client");
     }
+#ifdef GBOS_PARCEL_MODE
+    if (close(parcel_input)) fail("close launcher read-only Parcel input");
+#endif
     int client_status, server_status;
     require(waitpid(client_pid, &client_status, 0) == client_pid && WIFEXITED(client_status) &&
             WEXITSTATUS(client_status) == 0, "Android service client failed");
     require(waitpid(server_pid, &server_status, 0) == server_pid && WIFEXITED(server_status) &&
             WEXITSTATUS(server_status) == 0, "native service stub failed");
-#ifdef GBOS_PARCEL_MODE
-    if (umount("/dev/gbos-parcel-input")) fail("unmount private Parcel input");
-#endif
     if (umount("/dev/null") || umount("/dev/binder") || umount("/dev") || umount(argv[1])) fail("unmount private probe mounts");
 #ifdef GBOS_PARCEL_MODE
     puts("ANDROID_PARCEL=PASS: Android client and native Parcel endpoint exited successfully; runner must verify receipt output.");
