@@ -13,7 +13,7 @@ the property area, the logd launcher and the apex info list). New here:
   resource preload and the socket listen only. Output of the process, the log and a
   trace of file and network calls are shown; the process is stopped after a time limit.
 Nothing outside the tree's tmpfs mounts and the result directory is written.
-With --binder (stage B6a, approved by the user) the run also installs the temporary
+With --binder (stage B6a onward, approved by the user) the run also installs the temporary
 gbos_binder_probe SELinux module (one permissive domain; Fedora stays enforcing), mounts a
 private binderfs and starts the image's servicemanager in that domain, then removes the module.
 """
@@ -52,7 +52,10 @@ echo "/storage in the tree: $(ls -ld "$ROOT/storage" 2>&1)"
 # init mounts sysfs and the cgroup hierarchies; here /sys is a private tmpfs so the cgroup paths can exist
 if [ -d "$ROOT/sys" ]; then mount -t tmpfs -o mode=0755 tmpfs "$ROOT/sys" && echo "tmpfs on /sys (stand-in: no sysfs, no real cgroups)"; else echo "NOTE: tree has no /sys"; fi
 # /metadata, /data_mirror and /cache are mount points on a device (B6b listed their missing subfolders); private tmpfs here
-for d in metadata data_mirror cache; do [ -d "$ROOT/$d" ] && mount -t tmpfs -o mode=0755 tmpfs "$ROOT/$d" && echo "tmpfs on /$d"; done
+for d in metadata data_mirror cache; do
+  if [ -L "$ROOT/$d" ]; then echo "/$d in the tree is a symlink to $(readlink "$ROOT/$d") (no tmpfs; the init replay follows it)"
+  elif [ -d "$ROOT/$d" ]; then mount -t tmpfs -o mode=0755 tmpfs "$ROOT/$d" && echo "tmpfs on /$d"; fi
+done
 say "S0b every mkdir and symlink of the image's init .rc files, replayed under the tmpfs mounts, plus cgroups.json paths"
 "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
@@ -111,6 +114,9 @@ if [ -n "$SMCTX" ]; then
   sleep 5
   if kill -0 "$APEXDPID" 2>/dev/null; then echo "apexd still running"; else wait "$APEXDPID"; echo "apexd EXITED, status $?"; fi
   head -n 10 "$OUT/apexd.out" | grep -v linkerconfig | cut -c1-200
+  # apexd logs through libbase's KernelLogger, i.e. to the stand-in /dev/kmsg file, not to logd (B6e showed nothing in logcat)
+  echo "apexd messages in the stand-in /dev/kmsg so far (first 40):"
+  grep -a 'apexd' "$ROOT/dev/kmsg" | head -n 40 | cut -c1-240
 fi
 
 say "S2 derive_classpath"
@@ -174,7 +180,14 @@ if [ -n "$APEXDPID" ]; then
   echo "--- apexd in logcat (first 30 lines, then last 10):"
   timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' apexd' > "$OUT/apexd.logcat"
   head -n 30 "$OUT/apexd.logcat" | cut -c1-240; echo "..."; tail -n 10 "$OUT/apexd.logcat" | cut -c1-240
+  if kill -0 "$APEXDPID" 2>/dev/null; then echo "apexd still running at the end"; else echo "apexd is NOT running at the end"; fi
+  echo "--- apexd messages in the stand-in /dev/kmsg (all of them, up to 80):"
+  grep -a 'apexd' "$ROOT/dev/kmsg" | head -n 80 | cut -c1-260
   if [ -s "$OUT/apexd.trace" ]; then
+    echo "--- how apexd's processes ended (trace):"
+    grep -E '\+\+\+ (exited|killed)|--- SIG' "$OUT/apexd.trace" | cut -c1-200 | head -n 10
+    echo "--- last 15 apexd trace lines that are not memory or futex calls:"
+    grep -v -E 'futex|mmap|munmap|mprotect|madvise|PR_SET_VMA|brk\(' "$OUT/apexd.trace" | tail -n 15 | cut -c1-200
     echo "--- apexd failed calls, distinct (first 25):"
     grep -E '= -1 E' "$OUT/apexd.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'ld.so.preload|/proc/self' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 25
     echo "--- apexd mount, loop and device-mapper calls (first 15):"
@@ -423,7 +436,7 @@ def main():
         sys.exit("run as your ordinary user, without sudo")
     binder = "--binder" in sys.argv[1:]
     system_server = binder or "--system-server" in sys.argv[1:]
-    print("=== BRING-UP THREAD, STAGE " + ("B6a" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE " + ("B6f" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")

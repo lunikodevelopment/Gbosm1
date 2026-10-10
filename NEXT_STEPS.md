@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6e", below) and paste its output.
+bring-up stage B6f", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1080,7 +1080,23 @@ Operationally tested on the M1:
   are in ART threads that kept running (ART uses such faults for null checks). No enforced
   SELinux denials; the module was removed.
 
-## Next action: bring-up stage B6e, the image's apexd
+## Results: bring-up stage B6e (`root-smoke-r4invfl6`; reported by the user)
+
+- apexd started (the image's `/system/bin/apexd`, no arguments) and was still running 5 s
+  later, but it is **not in the process list at the end** and never registered
+  `apexservice`. Its only device call in the trace: `openat("/dev/device-mapper", O_RDWR)
+  = -1 ENOENT`, followed by `apexd: Failed to open device-mapper: No such file or
+  directory` written to fd 3. No mount, loop or `/dev/block` call followed. Why it ended is
+  not known: apexd logs to `/dev/kmsg` (the stand-in file on the tmpfs, gone after the
+  run), not to logd, so the "apexd in logcat" section was empty.
+- system_server unchanged from B6d: up for the whole 45 s, `service list` showed `manager`,
+  `protolog_configuration`, `system_server_dumper`; it waited for `apexservice` and sent
+  `ctl.interface_start=aidl/apexservice` 42 times.
+- `/cache` in the tree is a symlink, so the tmpfs was not mounted and the four init
+  `mkdir /cache/...` lines failed with "File exists". `/metadata` and `/data_mirror` got
+  their tmpfs. No enforced SELinux denials; the module was removed.
+
+## Next action: bring-up stage B6f, why apexd stops
 
 Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
 October 2026).
@@ -1103,7 +1119,16 @@ was interrupted, run `sudo semodule -r gbos_binder_probe`, then delete the print
 directory. No partition, boot, flash or enforcement change; no host device beyond the
 private binderfs.
 
-What changes from B6d: after servicemanager the run starts the image's own
+What changes from B6e: the run prints apexd's own messages from the stand-in `/dev/kmsg`
+(5 s after start and again at the end), says whether apexd is still running at the end,
+and shows how its processes ended (exit status or signal) and its last trace lines. When
+`/cache` (or `/metadata`, `/data_mirror`) is a symlink in the tree the run prints its
+target instead of mounting a tmpfs, and the init replay creates the `/cache/...` folders
+at the link's target inside the tree's tmpfs mounts. Nothing else changes: no new host
+device, policy or sudo action. Expected: apexd's log says what it needs after
+device-mapper fails, which decides the next step.
+
+Earlier change (B6e): after servicemanager the run starts the image's own
 `/system/bin/apexd` (no arguments, the daemon mode init uses for `aidl/apexservice`) as
 root of the sandbox, chrooted into the tree, in its own private mount namespace, under
 strace. It cannot reach host block, loop or device-mapper devices (the sandbox `/dev` has
@@ -1150,7 +1175,7 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --binder
 ```
 
 sudo asks for your password once or twice. Its first line reads `=== BRING-UP THREAD,
-STAGE B6a`. Paste only the command output (not the prompt line) into this thread,
+STAGE B6f`. Paste only the command output (not the prompt line) into this thread,
 "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)

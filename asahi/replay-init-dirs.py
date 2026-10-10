@@ -36,6 +36,15 @@ def rc_files(root):
     return found
 
 
+def in_tree(root, target):
+    """Host path for an absolute tree path; a symlinked top folder (the image's /cache) is followed inside the tree."""
+    parts = target.strip("/").split("/")
+    top = root / parts[0]
+    if top.is_symlink() and os.readlink(top).startswith("/"):
+        return root / os.readlink(top).lstrip("/") / "/".join(parts[1:])
+    return root / target.lstrip("/")
+
+
 def commands(path):
     in_action = False
     for raw in path.read_text(errors="replace").splitlines():
@@ -102,10 +111,10 @@ def main():
             if "$" in " ".join(words):
                 expanded.append(" ".join(words))
                 continue
-            if not target.startswith(WRITABLE):
-                outside.setdefault(target, (root / target.lstrip("/")).exists() or (root / target.lstrip("/")).is_symlink())
+            host = in_tree(root, target)
+            if not target.startswith(WRITABLE) and not str(host.relative_to(root)).startswith(tuple(w.strip("/") + "/" for w in WRITABLE)):
+                outside.setdefault(target, host.exists() or host.is_symlink())
                 continue
-            host = root / target.lstrip("/")
             try:
                 if words[0] == "symlink":
                     host.parent.mkdir(parents=True, exist_ok=True)
