@@ -2060,7 +2060,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2, 3a, 3b and 3c complete; stage 3d is next
+## Graphics: stages 0, 1, 2 and 3a-3d complete; stage 3e is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2098,54 +2098,71 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3d, minigbm with an `apple` dumb backend
+### Next: Graphics stage 3e, Android-built minigbm under Bionic
 
-Stage 3c (below) means an `apple` dumb backend is enough for linear buffers.
-minigbm tries `renderD*` first, where no backend matches (the `asahi` render
-node refuses dumb buffers), then the `card*` nodes, and `apple` is the only
-one with a backend, so three small edits should make it allocate. This step
-copies the stage 3a AOSP clone, applies those edits, builds minigbm natively
-with its own Makefile, then loads the resulting library from the Honeykrisp
-probe and allocates a 256x256 ARGB8888 buffer through `gbm_bo_create`,
-repeating the CPU-to-GPU and GPU-to-CPU checks from stage 3b. Android/Bionic,
-the allocator service and the mapper are not involved yet. The Makefile has
-not been read here, so a build failure is a likely first result; the report
-prints the Makefile head and the end of the build log for that case.
+Stage 3d (below) proved the patched minigbm on glibc. This step builds the same
+patched source for Android with the stage 2c toolchain (Fedora clang, NDK
+sysroot, stage 2c libdrm; no download), then runs a small Android probe under
+the image's own linker that loads it, allocates a 256x256 ARGB8888 buffer on
+the display card node through `gbm_bo_create`, maps the dma-buf and checks a
+CPU write and read. There is no GPU work in this step; the Honeykrisp import of
+a minigbm buffer under Bionic is the step after it. minigbm's Makefile is
+driven with `CC` carrying the cross flags, `PKG_CONFIG=true` (so host
+pkg-config paths cannot leak in) and libdrm's include and library paths; this
+has not been tried, so a compile or link error is a possible first result and
+the report prints the end of the make log.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/minigbm-apple-*` directory: a patched copy of the
-clone, its build output, the probe, `minigbm-apple.patch` and `report.txt`.
-The stage 3a clone is only read. One 256x256 dumb buffer is allocated on the
-display card node for the run only; no modeset, no DRM master. Delete the
-directory to reverse. Needs `gcc`, `make` and the stage 1 development packages.
+Creates one new `work/asahi/minigbm-bionic-*` directory: a copy of the patched
+source, the Android build output, a run directory (image linker and libraries
+copied from the stage 2d result), the probe and `report.txt`. Earlier results
+are only read. One 256x256 dumb buffer is allocated on the display card node
+for the run only; no modeset, no DRM master. Delete the directory to reverse.
+
+First remove the stray file the first stage 3d run left in the checkout, and
+check nothing else was left:
+
+```bash
+cd ~/Gbosm1 && rm -v ./libminigbm.so.1.0.0 && git status --short
+```
+
+If `git status --short` lists anything, send it; those are leftover build files
+(`.o`, `.d`, `.pc`) from that run and are safe to delete once you have shown me.
+Then:
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/run-minigbm-apple.sh
+bash asahi/run-minigbm-bionic.sh
 ```
 
-First run (reported by the user, `work/asahi/minigbm-apple-z8KW4UUb`): the
-three edits applied and minigbm built (`libminigbm.so.1.0.0`, make exit 0), so
-its Makefile works natively. The script then stopped because it searched only
-its own directory: minigbm's `common.mk` put the build output under the shell's
-current directory (`~/Gbosm1`) instead. That was a bug in my script, which
-claimed to write only inside `work/asahi/`. The script now builds with an
-explicit output directory inside the results directory. Before rerunning,
-find and remove the stray output from the first run (it is only build output;
-nothing else is in it):
+Send the printed `report.txt`.
 
-```bash
-cd ~/Gbosm1 && find . -name 'libminigbm.so*' -not -path './work/*'
-```
+### Result: Graphics stage 3d, patched minigbm on glibc (passed)
 
-Delete the directory that command shows (the one that holds
-`libminigbm.so.1.0.0`; `git status --short` should then show nothing new).
-Then rerun the command above.
+Operationally tested, reported by the user from
+`work/asahi/minigbm-apple-a0C8AxLS` (after a first run,
+`minigbm-apple-z8KW4UUb`, built it but had a script bug that wrote the build
+output into `~/Gbosm1`; fixed in b0819ba):
 
-Send the printed `report.txt`. The modified files stay under minigbm's BSD
-license (`LICENSE` is kept in the copy); the source is AOSP
-`external/minigbm` `455b745` as recorded in stage 3a.
+- Source: AOSP `external/minigbm` `455b745`, with three edits (see
+  `minigbm-apple.patch` in the result directory): `extern const struct backend
+  backend_apple;` and `&backend_apple,` in `drv.c`, and
+  `INIT_DUMB_DRIVER(apple)` in `dumb_driver.c`. Native build with minigbm's
+  own Makefile, `make` exit 0, `libminigbm.so.1.0.0`.
+- Loaded from the Honeykrisp probe by path: `gbm_create_device` on the `apple`
+  card node succeeded (so the backend matched by driver name), `gbm_bo_create`
+  (ARGB8888, 256x256, scanout|rendering|linear) gave a dma-buf of 262144 bytes,
+  stride 1024. It was imported into Honeykrisp as a linear image and both
+  directions passed: CPU write then GPU read (65536/65536) and GPU clear then
+  CPU read (65536/65536). That repeats the stage 3b result, now through
+  minigbm.
+- The stage 3b dumb-buffer cases and the dma-heap permission denial repeated
+  unchanged.
+
+This supports option 1 from stage 3a (an `apple` dumb backend, linear buffers
+only). Not covered: the Android build, other processes, tiled or compressed
+buffers, scanout, the allocator service and the mapper.
 
 ### Result: Graphics stage 3c, display import of GPU-node buffers (passed)
 
