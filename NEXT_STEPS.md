@@ -1498,35 +1498,52 @@ own modifier does too. Both passing supports allocating through Mesa's GBM
 around. This does not test Android, Bionic, scanout or fences between
 processes.
 
-### Next: Graphics stage 2c, cross-build Honeykrisp for Android
+### Next: Graphics stage 2d, run Android Honeykrisp under Bionic
 
-Builds Mesa 26.2.4's Asahi Vulkan driver as an Android arm64 library, using
-Fedora's clang, the NDK r28c target sysroot (NDK_TESTED in `lib.sh`) and the
-stage 2b host compilers. Meson options follow the upstream Android Mesa build in
-`build-guest.sh`. The library is only built and inspected; it is not loaded,
-run or copied into any image.
+Runs the stage 2c `vulkan.asahi.so` through the image's own Android linker on
+Fedora, as the ordinary user: a small Android probe dlopens the driver directly
+(no Android Vulkan loader, properties, Binder or display), creates a device on
+the Asahi GPU, fills a 4 KiB buffer and reads it back. The probe's logic was
+checked in the cloud against Mesa's software driver (glibc x86_64, readback
+PASS); its Android build and the GPU run are untested.
 
 **THIS STEP MODIFIES STORAGE**
 
-Downloads `android-ndk-r28c-linux.zip` once into `work/asahi/downloads`
-(several hundred MB; kept for reuse) and creates one new
-`work/asahi/honeykrisp-android-*` directory (sysroot extract, source, build;
-roughly 2 GB, an estimate). Meson may fetch the libdrm and expat fallback
-sources it is told to build. Nothing is installed outside these paths; delete
-them to reverse.
+Creates one new `work/asahi/honeykrisp-bionic-*` directory with the built probe,
+copies of the stage 2c driver and libdrm, the completed Bionic runtime, and any
+further system_a libraries the driver needs (read from the image). Delete it to
+reverse. Earlier results and the image are only read.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-honeykrisp-android.sh
+python3 asahi/probe-honeykrisp-bionic.py
 ```
 
-Send the printed `report.txt` (on failure, also the end of
-`build/meson-logs/meson-log.txt` in the result directory). It records whether
-Fedora's tarball matches the upstream Mesa pin, the NDK checksum, and for the
-built `vulkan.asahi.so`: ELF class, PT_LOAD alignment (16 KiB expected),
-`DT_NEEDED`, Android HAL/ICD entry symbols and `VK_ANDROID_*` strings. Untested
-assumption: Fedora clang 22 links correctly with the NDK's sysroot and runtime
-archives through a combined resource directory.
+Send the printed `report.txt`. `HONEYKRISP_BIONIC=PASS` would show the
+Android-built driver submitting GPU work on the 16 KiB kernel. A stop names the
+step (build, a missing system_a library, dlopen, device creation or readback).
+
+### Result: Graphics stage 2c Android Honeykrisp build
+
+Reported by the user from `work/asahi/honeykrisp-android-b7O7HstT` (built and
+inspected; not loaded or run):
+
+- Fedora's `mesa-26.2.4.tar.xz` sha256 matches the upstream pin in `lib.sh`
+  (`bce5f7fb...e9`).
+- `android-ndk-r28c-linux.zip` downloaded, sha256
+  `dfb20d396df28ca02a8c708314b814a4d961dc9074f9a161932746f815aa552f`
+  (not yet compared with Google's published checksum); 4604 sysroot and
+  runtime files extracted.
+- Fedora clang 22.1.8 with the NDK sysroot and combined resource directory
+  configured and built (625 steps, exit 0, no compiler warnings in the
+  output). Meson used the stage 2b `mesa_clc`, `vtn_bindgen2` and `asahi_clc`;
+  libdrm 2.4.133 was built as a fallback subproject.
+- `vulkan.asahi.so`: ELF64 AArch64, 13.6 MB stripped, all four PT_LOAD
+  segments 16 KiB aligned. `DT_NEEDED`: libdrm, libhardware, liblog,
+  libnativewindow, libsync, libz, libm, libdl, libc. Exports `HMI` (the Android
+  HAL module symbol) and `vk_icdGetInstanceProcAddr`; contains
+  `VK_ANDROID_native_buffer`, `VK_ANDROID_external_memory_android_hardware_buffer`
+  and `VK_ANDROID_external_format_resolve`.
 
 ### Result: Graphics stage 2b host compilers
 
