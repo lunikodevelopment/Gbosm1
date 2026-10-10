@@ -59,7 +59,7 @@ if [[ -n $FAILED ]]; then
 fi
 echo "Compiled $(ls "$OUT"/obj/*.o | wc -l) objects."
 echo '== Link'
-if clang++ -pthread "$OUT"/obj/*.o -lgtest -o "$OUT/aidl" 2>&1 | head -30; [[ -x $OUT/aidl ]]; then
+if clang++ -pthread "$OUT"/obj/*.o -lgtest -lfmt -o "$OUT/aidl" 2>&1 | head -30; [[ -x $OUT/aidl ]]; then
     "$OUT/aidl" --help 2>&1 | head -6
 else
     echo "Stopped at link. Send $OUT/report.txt"; exit 1

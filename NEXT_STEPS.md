@@ -2350,6 +2350,10 @@ script now also compiles `asahi/liblog-host-shim.cpp`, a small original
 stand-in that logs to stderr. No new packages; rerun the same two lines
 (`git pull --ff-only`, `bash asahi/build-aidl-host.sh`) and send `report.txt`.
 
+Fourth run (reported): 52 objects compiled; the link lacked one fmt symbol
+(`fmt::vformat`). The script now links `-lfmt` (from the installed fmt-devel).
+Same two rerun lines, then send `report.txt`.
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3i, AOSP sources (fetched, not built)
