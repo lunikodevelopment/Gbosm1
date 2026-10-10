@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6g", below, read-only) and paste its output.
+bring-up stage B6h", below, read-only) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1112,7 +1112,32 @@ Operationally tested on the M1:
 - `/cache` is a symlink to `/data/cache`. The replay now created the four `/cache/...`
   folders there (316 mkdir, no failures). No enforced SELinux denials; the module was removed.
 
-## Next action: bring-up stage B6g, apexd's full log from the B6f trace (read-only)
+## Results: bring-up stage B6g (read from the B6f trace; reported by the user)
+
+apexd's full log (strace copy), apart from the 45 `Found pre-installed APEX` lines:
+`Started. subcommand = (null)`; `File-backed mount is disabled: ro.boot.veritymode=`;
+`Could not retrieve vold service: Failed to retrieve vold service.`; scans of
+`/system/apex`, `/system_ext/apex`, `/product/apex`, `/vendor/apex` (`/odm/apex does not
+exist. Skipping`); `Successfully scanned 45 preinstalled APEXes duration=55ms`;
+`Populating APEX database from mounts...`; `Failed to open device-mapper: No such file or
+directory`; `0 packages restored.` Then it exited with status 0 and logged nothing about
+`apexservice`. Why it exits there is not shown by the log. One possibly relevant input is
+configured by this test, not tested: the property area has `apexd.status=ready` (added for
+earlier stages), which an apexd that checks it could read as "boot already finished".
+
+## Next action: bring-up stage B6h, apexd's last system calls and property reads (read-only)
+
+Nothing is run or written; this reads the B6f trace again. It prints apexd's calls after
+`0 packages restored.` (without memory, futex and signal-mask calls), and every binder or
+property-related call apexd made.
+
+```bash
+T=~/Gbosm1/work/asahi/root-smoke-hdxvmhxl/apexd.trace; N=$(grep -n -a 'packages restored' "$T" | head -n 1 | cut -d: -f1); echo "--- after line $N:"; tail -n +"$N" "$T" | grep -v -E 'futex|mmap|munmap|mprotect|madvise|PR_SET_VMA|rt_sigprocmask|brk\(|resumed>' | head -n 60 | cut -c1-200; echo "--- binder and property calls:"; grep -a -E 'binder|__properties__|property_service|ioctl\(' "$T" | cut -c1-200 | head -n 30; echo "=== B6h END ==="
+```
+
+Paste the output into this thread, "Remaining steps to boot Android".
+
+## Previous action (done): bring-up stage B6g, apexd's full log from the B6f trace (read-only)
 
 Nothing is run or written; this only reads the trace file B6f left on disk. It prints the
 apexd log lines that strace recorded, starting near where the stand-in file broke off.
