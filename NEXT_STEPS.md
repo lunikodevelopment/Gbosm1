@@ -8,11 +8,41 @@ Current status: Bionic Toybox execution and native private Binder echo both pass
 on Fedora Asahi ARM64/16 KiB. The dedicated Binder server domain ran with SELinux
 enforcing; its temporary module was removed and the new executable label restored.
 Qualcomm graphics adaptation remains required.
-Next action: run the recovery image's Android `service list` command against a
-minimal native empty-list service-manager stub in a separate private Binder
-context. This revision has not yet run on the target.
+Next development action: add Android-client syscall tracing and ensure descendant
+process cleanup after an alarm, then diagnose the client startup wait. No new
+user command is ready yet. Do not repeat the current service-list command.
 
-## One command: Android libbinder list request
+## Retrieved libbinder attempt: incomplete
+
+Results: `/home/gbos_user/Gbosm1/work/asahi/libbinder-probe-gx0g75qh`.
+
+| Operation | Result | Scope |
+|---|---|---|
+| Android client/runtime extraction | 14 inspected ARM64/16 KiB ELF files, including libbinder and runtime libdl_android | Candidate dependencies prepared; no missing ELF reported. |
+| Native stub build and device context collection | Exit 0; device/root type binderfs_t | Existing Binder setup succeeded. |
+| Temporary policy installation and executable labeling | Both exit 0 | Dedicated server policy installed for this attempt. |
+| Android client/stub execution | Return -14 (SIGALRM); no `ANDROID_PARCEL` request or success marker logged | Launcher reached its alarm; client completion and parcel exchange not established. |
+| Executable context restoration | Exit 0 | New native stub label restored. |
+| Temporary policy removal | Exit 0 | Removal log confirms no other gbos_binder_probe priority remained. |
+| Recent AVC search | Exit 1, `<no matches>` | No matching AVCs in that queried window. |
+
+The private /dev overlay was established and the Android linker started.
+Its missing generated linker-configuration warning was already nonfatal for
+Toybox; this output does not identify it as the cause of this wait. The stub
+readiness handshake preceded launching the client, but no request was logged.
+Syscall tracing of the Android client is needed before changing its environment,
+properties, namespace configuration or SELinux policy.
+
+The existing runner kills a process group on a Python timeout, but a launcher
+that exits from its own alarm can leave descendants running. Policy/label
+cleanup succeeded; this report does not prove every descendant exited or every
+private mount namespace was released. Add process-group cleanup and inspect for
+surviving probe processes before another attempt. Do not kill unrelated services.
+
+## Previous command: Android libbinder list request
+
+Retained as provenance; do not rerun until tracing and descendant cleanup are
+implemented.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -303,8 +333,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Run the focused Android service-list client/stub probe and inspect its
-   parcel and cleanup results before selecting further libbinder integration.
+1. Diagnose the Android service client startup wait with syscall tracing and
+   reliable descendant cleanup before another libbinder attempt.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
