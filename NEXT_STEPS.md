@@ -4,44 +4,55 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: Honeykrisp GPU readback passed; recovery image verified; Android
-17 build properties and four core ARM64 ELF alignment samples inspected.
-Next action: run the focused recovery audit once and send its report.
+Current status: Honeykrisp GPU readback passed; recovery image verified;
+recovery audit completed with 15 ARM64/16 KiB ELF samples and 81 VINTF XML files.
+Next action: inspect the Qualcomm graphics dependencies and runtime APEX payloads.
 
-## One command: recovery userspace audit
+## One command: graphics and runtime follow-up
 
 **THIS STEP MODIFIES STORAGE**
 
 The Git pull updates tracked source files in `~/Gbosm1` on the home filesystem.
-It preserves Git history and stops on conflicts; do not discard local changes.
-The audit creates a new `work/asahi/recovery-audit-*` directory containing
-`report.txt`, `summary.json`, inventories, XML copies, and tool diagnostics.
-It retains earlier results and opens the recovery image read-only.
-Delete only the newly printed result directory to reverse the generated writes;
-source versions remain recoverable through Git. No partition, mount, SELinux,
-or boot configuration changes are performed.
+It preserves Git history and stops on conflicts; retain local changes.
+The script creates a new `work/asahi/graphics-audit-*` report directory and
+uses temporary APEX package/payload copies inside it. Temporary copies are
+removed automatically. Existing reports and the recovery image are retained.
+Possible loss is limited to disk space used by new reports and temporary copies;
+Git updates tracked source versions. Delete only the newly printed result
+directory to reverse report writes; source versions remain recoverable in Git.
 
 Run as `gbos_user`, without sudo:
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-recovery.py artifacts/mica-recovery.raw
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-graphics.py
 ```
 
-The current target already has Python 3 and `erofs-utils 1.9.4`.
-The script discovers GPT and Android logical-partition offsets, validates
-primary metadata checksums, identifies EROFS, reads build properties, walks
-VINTF directories and fragments, inventories APEX packages, and checks selected
-core and vendor graphics ELF files for ARM64, 16 KiB PT_LOAD alignment and
-declared DT_NEEDED dependencies. It reads files with `dump.erofs`; it does not
-execute Android binaries, download images, install packages, or rerun the
-completed hardware baseline and Vulkan milestone.
+The script selects the latest completed recovery audit, uses its image path,
+and revalidates GPT/LP metadata. The current target already has Python 3 and
+`dump.erofs` from `erofs-utils 1.9.4`. It inspects selected vendor graphics
+library dependencies and init files, inventories APEX packages and `system_b`,
+and reads selected runtime/graphics APEX payloads. Runtime samples cover
+`linker64`, `libc.so`, `libm.so` and `libdl.so`.
+
+Packages larger than 512 MiB are rejected after copying; declared nested APEX
+and payload sizes are checked before extraction, with a 512 MiB limit each.
+An accepted package and payload can occupy approximately 1 GiB temporarily.
+EROFS payloads use `dump.erofs`; ext4 payloads use read-only `debugfs` when
+available and are reported unresolved otherwise. No image download or Android
+binary execution is needed.
 
 Send `report.txt` and `summary.json` from the printed result directory.
 If the command stops, send the error and any report it created.
-An audit exit status of 0 means the static scan completed, not that Android is
-compatible. Unresolved findings are reported explicitly. APEX payload contents,
-dependency resolution, complete ELF coverage, operational VINTF checks and
-Android HAL execution remain unverified.
+Exit 0 means collection completed, not Android compatibility. Candidate library
+locations do not establish linker namespace resolution. Selected APEX packages
+and their base VINTF XML are inspected; fragment coverage is not exhaustive.
+Operational VINTF compatibility, HAL execution and display composition remain
+unverified.
+
+The preceding recovery audit is complete; retain its results without rerunning:
+`/home/gbos_user/Gbosm1/work/asahi/recovery-audit-frw8c3gt`.
+Its only reported unresolved finding was missing candidate build properties in
+`system_b`; that partition's purpose remains unidentified.
 
 ## Evidence already received
 
@@ -67,8 +78,10 @@ User-supplied Fedora output on 10 October 2026 establishes:
 | Userspace filesystems | system_a, system_b, vendor_a, product_a, system_ext_a are EROFS | Filesystem signatures read directly from image. |
 | Android properties | A-side system/vendor/product/system_ext report Android 17, SDK 37/37.1, build 16471258 | System/vendor security patch 2026-09-01; vendor board API 202604 and first API level 37. Image facts, not runtime boot evidence. |
 | system_b | EROFS extent present; properties not found at candidate paths | Its purpose and slot relevance remain unidentified. |
-| Core ELF samples | init, surfaceflinger, libbinder.so and libgui.so are ARM64; every PT_LOAD has alignment 0x4000 and 16 KiB offset/address congruence | Four-file static sample only; broader library/APEX compatibility remains unverified. |
-| VINTF | System, vendor, product and system_ext files/directories found | Declarations enumerated; compatibility and runtime HAL operation untested. |
+| ELF samples | 15 core/vendor graphics binaries are ARM64 and satisfy 16 KiB PT_LOAD alignment | Static sample only; runtime APEX and complete userspace compatibility remain unverified. |
+| VINTF | 81 XML files collected; vendor target-level 202604 | Enumeration only; full VINTF compatibility and runtime operation untested. |
+| Core graphics declarations | Allocator AIDL v2, composer3 AIDL v5, native mapper 5.0/qti | Versions fall within framework matrix 202604 ranges (allocator 1–3, composer3 4–5, mapper 5.0); no full compatibility pass. |
+| Vendor graphics dependencies | Adreno Vulkan; QTI allocator/mapper; DRM-named composer requires libsdmcore, libgralloc.qti and QTI snapalloc | Hardware-specific dependency evidence. These paths need replacement/adaptation for Asahi; 16 KiB alignment does not establish driver compatibility. |
 
 Vulkan validation results were saved in
 `/home/gbos_user/Gbosm1/work/asahi/results-7EXxM0au`.
@@ -82,8 +95,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Inspect APEX payloads and resolve graphics allocator/composer/driver
-   dependencies and VINTF declarations.
+1. Use the follow-up report to select an Asahi graphics allocator/composer/driver
+   replacement or adaptation and identify remaining runtime dependencies.
 2. Validate Android kernel interfaces and choose a native vendor/HAL milestone
    using matching Asahi kernel sources and driver ABI.
 3. Review a recoverable standalone boot approach only after userspace/kernel
