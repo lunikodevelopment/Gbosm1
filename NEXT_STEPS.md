@@ -299,6 +299,11 @@ cleanup codes 0). Reported facts from its strace and stderr:
   overlaps). I read no new denial in this run's output, but the query does not
   separate runs, so treat that as unconfirmed until the query is bounded.
 
+Confirmed from the run's `summary.json` (reported by the user): `exit_status` 0,
+cleanup `context` 0 and `policy` 0, `unresolved` libraries empty, run start
+21:43:34 local time. That start time is after the 21:42:39 denials, which confirms
+those five AVC lines belong to the previous run.
+
 What this establishes: the unmodified image `servicemanager` runs under the
 extracted Android linker in the dedicated domain, with Fedora SELinux
 enforcing, and takes the context-manager role. It does not yet establish that
