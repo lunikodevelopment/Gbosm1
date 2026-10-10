@@ -35,6 +35,11 @@ say "S0 property area"
 "$PY" "$PROPS" "$ROOT" "$ROOT/dev/__properties__" logd.ready=true servicemanager.ready=true apexd.status=ready \
   ro.logd.auditd=false ro.logd.kernel=false ro.boottime.init=1 sys.boot_completed=0 ro.zygote=zygote64 2>&1 | cut -c1-300
 
+# directories Android's init.rc creates under /data before zygote starts (tmpfs here, gone at exit)
+mkdir -p "$ROOT/data/dalvik-cache/arm64" "$ROOT/data/misc" "$ROOT/data/system" "$ROOT/data/user/0" "$ROOT/data/user_de/0" \
+  "$ROOT/data/app" "$ROOT/data/anr" "$ROOT/data/tombstones" "$ROOT/data/local/tmp"
+chmod 0771 "$ROOT/data/dalvik-cache" "$ROOT/data/dalvik-cache/arm64"
+
 say "S1 linkerconfig first (no logd yet), then logd under the generated config"
 timeout 120 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig 2>&1 | head -n 5
 ls "$ROOT/linkerconfig" | wc -l
@@ -59,7 +64,7 @@ for i in $(seq 1 "$WAIT"); do kill -0 "$ZPID" 2>/dev/null || break; sleep 1; don
 if kill -0 "$ZPID" 2>/dev/null; then echo "zygote STILL RUNNING after ${WAIT}s"; else wait "$ZPID"; echo "zygote EXITED, status $?"; fi
 echo "--- zygote stdout/stderr (first 30):"; head -n 30 "$OUT/zygote.out" | cut -c1-240
 echo "--- zygote socket:"; ls -l "$ROOT/dev/socket" 2>&1 | cut -c1-120
-echo "--- processes in the namespace:"; for p in /proc/[0-9]*; do printf '%s %s\n' "${p#/proc/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
+echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf '%s %s\n' "${p##*/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
 echo "--- logcat -d, last 40 (zygote, ART, libc, DEBUG):"
 timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | grep -v -E 'derive_classpath' | tail -n 40 | cut -c1-260
 if [ -s "$OUT/zygote.trace" ]; then

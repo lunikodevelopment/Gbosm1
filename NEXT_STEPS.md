@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B4", below) and paste its output.
+bring-up stage B4b", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -720,30 +720,39 @@ Operationally tested on the M1:
   from programs that ran before `linkerconfig` in that script; B4 runs it first.
 - Not yet tested: zygote's own startup, any binder-dependent code, SELinux labels.
 
-## Next action: bring-up stage B4, zygote preload without system_server
+## Results: bring-up stage B4 (`root-smoke-cx2ns4gy`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: rewrites
-`apex/apex-info-list.xml` in the extracted tree (same content as B3g) and creates
-one `work/asahi/root-smoke-*` directory with the script, logs and an `strace` file
-of file and network calls (can reach tens of MB). The tree is read-only during the
-run; private tmpfs mounts take every other write and vanish at exit. Loss: none.
-Reversal: delete the printed directory (the XML file may stay). No sudo, no
-SELinux module, no binder, no partition, boot or flash change.
+- `app_process64 -Xzygote --zygote` started (the image binary loaded and ran) and
+  aborted at once with `Error creating cache dir /data/dalvik-cache/arm64: No such
+  file or directory`. Cause: Android's init creates `/data/dalvik-cache` and similar
+  directories before zygote starts; the test `/data` tmpfs was empty. Not an ART or
+  image problem.
+- The zygote socket was created and passed (`/dev/socket/zygote`). `logd`,
+  `linkerconfig` (24 entries) and `derive_classpath` all worked in the new order.
+- The crash handler could not report (`crash_dump64` is traced by `strace`, and no
+  `tombstoned`), so aborts show only in `logcat`. Expected, not a fault.
+- Harmless misses in the trace: no `/sys/fs/selinux` (SELinux treated as absent
+  inside the sandbox), no `/sys/kernel/tracing`, no `/odm`, `/product/lib64`.
+  The process list printed the host's processes (my listing read the wrong
+  `/proc`); fixed to read the sandbox's.
 
-What it does: runs `linkerconfig`, then `logd`, then `derive_classpath`, then the
-image's `app_process64 -Xzygote /system/bin --zygote --socket-name=zygote` with
-the zygote socket at `/dev/socket/zygote` passed in as `ANDROID_SOCKET_zygote`
-(as init does) and the classpath variables set, for up to 60 seconds. There is no
-`--start-system-server` and no binder, so this tests ART's zygote init, preload
-and socket listen only. It prints the process output, `logcat`, the processes
-in the namespace and the failed calls in the trace. Expect it may stop early; the
-stop reason is the result.
+## Next action: bring-up stage B4b, zygote preload with /data directories created
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4: the
+rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
+(logs, trace up to tens of MB); the `/data` directories are created on the private
+tmpfs and vanish at exit. Loss: none. Reversal: delete the printed directory. No
+sudo, no SELinux module, no binder, no partition, boot or flash change.
+
+What changes: `/data/dalvik-cache/arm64` (mode 0771), `/data/misc`, `/data/system`,
+`/data/user/0`, `/data/user_de/0`, `/data/app`, `/data/anr` and `/data/tombstones`
+are created before zygote starts, as init.rc does. Everything else is as in B4.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B4`. Paste only the command
+Its first line still reads `=== BRING-UP THREAD, STAGE B4`. Paste only the command
 output (not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
