@@ -49,11 +49,13 @@ echo '== Sources: top level plus utils, host_utils, hashing, metadata'
 } > "$OUT/units.txt"
 echo "units: $(wc -l < "$OUT/units.txt")"
 # Soong exports each library's include dirs; here every directory that holds a header goes on the path.
-IFL=; for d in $(find "$H" -name '*.h' -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*' -printf '%h\n' | sort -u); do IFL="$IFL -I$d"; done
-FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -include cstdint -I$H -I$OUT/gen-parser $IFL -I$B/include -I$SRC/system_logging/liblog/include -I$SRC/system_core/libutils/include -I/usr/include/jsoncpp"
-export OUT FLAGS
+IFL=; for d in $(find "$H" -type d -name include -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*') $(find "$H" -name '*.h' -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*' -printf '%h\n' | sort -u); do IFL="$IFL -I$d"; done
+FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$H -I$OUT/gen-parser $IFL -I$B/include -I$SRC/system_logging/liblog/include -I$SRC/system_core/libutils/include -I/usr/include/jsoncpp"
+# cstdint is forced only for hidl-gen's own units; libbase units must see the headers in their own order.
+FLAGS_HIDL="$FLAGS -include cstdint"
+export OUT FLAGS FLAGS_HIDL
 echo '== Compile (parallel)'
-xargs -P "$(nproc)" -L1 bash -c 'clang++ $FLAGS -c "$0" -o "$OUT/obj/$1.o" >"$OUT/obj/$1.log" 2>&1 || echo "FAILED $1"' < "$OUT/units.txt"
+xargs -P "$(nproc)" -L1 bash -c 'F=$FLAGS; case "$1" in base_*|shim_*) ;; *) F=$FLAGS_HIDL;; esac; clang++ $F -c "$0" -o "$OUT/obj/$1.o" >"$OUT/obj/$1.log" 2>&1 || echo "FAILED $1"' < "$OUT/units.txt"
 FAILED=$(cd "$OUT/obj" && for l in *.log; do n=${l%.log}; [[ -e $n.o ]] || echo "$n"; done)
 if [[ -n $FAILED ]]; then
     echo "Compile failures: $(echo $FAILED | tr '\n' ' ')"

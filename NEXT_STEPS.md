@@ -2429,6 +2429,16 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-hidl-gen-host.sh
 ```
 
+Second run (reported): `hidl-gen` headers are included as `<hidl-util/...>` and
+`<hidl-hash/...>`, so the parent `include` directories are needed too (restored),
+and the forced `-include cstdint` broke `libbase/posix_strerror_r.cpp`
+(now applied only to `hidl-gen`'s own units). Same rerun lines, no dnf:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-hidl-gen-host.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3l, HIDL and gralloctypes dependencies
