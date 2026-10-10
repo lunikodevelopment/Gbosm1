@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): run the boot-sequence scan ("Next action:
-boot-sequence scan", below) and paste its output.
+Bring-up track (separate thread): run the root-tree host check ("Next action:
+bring-up stage B1a", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -482,25 +482,71 @@ B0): properties and logd, then servicemanager (done), apexd and linkerconfig,
 vold-less data mounts (stubbed), hwservicemanager and vndservicemanager, the
 graphics allocator and composer HALs, zygote, system_server, SurfaceFlinger.
 
-## Next action: boot-sequence scan (read-only; bring-up thread, stage B0)
+## Results: bring-up stage B0, boot-sequence scan (`boot-sequence-bb1e0vsw`; enumerated, nothing run)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: one new
-`work/asahi/boot-sequence-*` directory in your checkout with a text report, a
-copy of the main init scripts and the printable `init` messages. Filesystem:
-your home filesystem. The image is only read through `dump.erofs`; nothing is
-mounted, unpacked or executed, and no sudo is used. Loss: none. Reversal:
-delete the printed directory.
+Read from the image's init scripts and binaries; nothing executed.
+- Boot order from `init.rc`: `early-init` starts `ueventd` and `apexd-bootstrap`;
+  `init` starts `logd`, `lmkd`, `servicemanager`, `hwservicemanager` and
+  `vndservicemanager`; `early-fs` starts `vold`; `post-fs-data` runs
+  `derive_classpath`, `art_boot`, `odsign`, `apexd` pieces and `vdc` calls;
+  `zygote-start` starts `statsd` and `zygote` (64-bit, plus a 32-bit
+  `zygote_secondary` entry); `boot` starts classes `hal` then `core`.
+  Zygote start also waits on `apexd.status=ready`.
+- `logd` has three sockets (`logd`, `logdr`, `logdw`), runs as user `logd`, needs
+  `/proc/kmsg` and `/dev/kmsg`, and holds the SYSLOG and AUDIT_CONTROL capabilities.
+  `lmkd` and `servicemanager` are `critical` (init reboots into recovery or
+  bootloader if they keep failing); `zygote` is `critical` after a window.
+- Services run as `system`, `logd`, `graphics`, `keystore` and others. A user
+  namespace that maps only your own user to root cannot `setuid` to them, so the
+  host's multi-id mapping support has to be checked (stage B1a, below).
+- `vendor.hwcomposer-3` is already `android.hardware.composer.hwc3-service.drm`
+  (a DRM composer, class `hal`, group `graphics drmrpc`); the allocator is still
+  the Qualcomm one; `ro.hardware.vulkan=adreno`, `ro.hardware.egl=angle`,
+  `ro.zygote=zygote64`, `dalvik.vm.heapsize=512m`.
+- Properties: 561 distinct build properties (about 24 KB of names and values) and
+  556 property-context labels (plat 379, system_ext 40, vendor 140). Our hand-built
+  `servicemanager.ready` file was consumed by Bionic as one regular file at
+  `/dev/__properties__`, so one single-area file holding all 561 properties is a
+  plausible stand-in layout (inference from that earlier run; not tested with
+  that many properties).
+- `init` strings: it has `second_stage`, `selinux_setup`, `first_stage`,
+  `subcontext`, a property service with its own socketpair, "Loading SELinux
+  policy", `security_setenforce`, writes under `/sys/fs/selinux`, mounts tmpfs on
+  `/apex` and `/linkerconfig`, runs linkerconfig, and has reboot and
+  "Rebooting into recovery" paths. It needs `/proc/cmdline` or bootconfig for
+  `ro.boot.*`. Services that fail an SELinux context transition do not start
+  ("Could not perform selinux transition", "has incorrect label or no domain
+  transition").
+- `hwservicemanager` is a 39-byte non-ELF file (a stub or symlink, not looked at);
+  `/system/bin/linkerconfig` is not in `system_a`, so it probably lives in an apex.
+  `prop.default` and `default.prop` do not exist in this image.
 
-Why: it decides between running the image's `init` and writing stand-ins, and
-gives the real dependency order for B3.
+What this changes in the plan:
+- Running the image's own `init` stays a possible later experiment, not the
+  first move. Its SELinux transitions, uid switching, `vold` and `ueventd`
+  dependencies make a first run likely to produce one long failure list, and
+  the multi-uid question has to be settled first either way.
+- The next stage extracts the partitions into a root tree so that `/system`,
+  `/vendor` and the apex payloads exist as real directories. That serves ART
+  (stage 9a), the property service stand-in, `logd` and any later `init` try.
+
+## Next action: bring-up stage B1a, root-tree host check (read-only)
+
+**This step does not modify storage.** It only reads the validated image
+metadata and prints host facts. Nothing is created, mounted or executed from the
+image.
+
+Why: before extracting about five partitions into a tree, it shows their
+sizes, your free space, whether your user may map more than one user id into a
+private namespace (needed for services that run as non-root users), and which
+erofs tools can extract a whole tree.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-boot-sequence.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/check-rootfs-host.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B0: BOOT-SEQUENCE SCAN`. Paste the
-terminal output into the thread titled "Remaining steps to boot Android" (it is
-long; attach it as a file if needed).
+Its first line reads `=== BRING-UP THREAD, STAGE B1a`. Paste the terminal output
+into the thread titled "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 
