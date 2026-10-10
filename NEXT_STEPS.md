@@ -11,10 +11,10 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none is queued. The servicemanager inspection (below) shows that
-running the image's real `servicemanager` needs several fixtures; decide whether
-to pursue that or stop at the completed Parcel milestone. Retain all earlier
-results; no completed probe needs rerunning.
+Next action: none is queued. The user chose to stop at the completed Android
+Parcel milestone; the real-servicemanager attempt (VINTF, SELinux and property
+fixtures, see the servicemanager inspection below) is not planned. Retain all
+earlier results; no completed probe needs rerunning.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
