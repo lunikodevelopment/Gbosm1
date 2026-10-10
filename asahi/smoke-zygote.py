@@ -45,7 +45,9 @@ mkdir -p "$ROOT/mnt/user/0" "$ROOT/mnt/runtime/default" "$ROOT/mnt/runtime/read"
   "$ROOT/mnt/media_rw" "$ROOT/mnt/data_mirror"
 chmod 0751 "$ROOT/mnt/user/0"
 echo "/storage in the tree: $(ls -ld "$ROOT/storage" 2>&1)"
-say "S0b every mkdir and symlink of the image's init .rc files, replayed under the tmpfs mounts"
+# init mounts sysfs and the cgroup hierarchies; here /sys is a private tmpfs so the cgroup paths can exist
+if [ -d "$ROOT/sys" ]; then mount -t tmpfs -o mode=0755 tmpfs "$ROOT/sys" && echo "tmpfs on /sys (stand-in: no sysfs, no real cgroups)"; else echo "NOTE: tree has no /sys"; fi
+say "S0b every mkdir and symlink of the image's init .rc files, replayed under the tmpfs mounts, plus cgroups.json paths"
 "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
 say "S1 linkerconfig first (no logd yet), then logd under the generated config"

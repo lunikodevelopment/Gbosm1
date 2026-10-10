@@ -5,19 +5,23 @@ Original project script. On a device init runs every `mkdir PATH [MODE [OWNER [G
 and `symlink TARGET LINK` in the `on ...` sections of its .rc files before zygote starts.
 The smoke tests have no init, so programs failed one missing directory at a time
 (/data/dalvik-cache, /mnt/user/0). This replays all of them at once, but only below the
-test's private tmpfs mounts (/dev, /data, /mnt, /linkerconfig, /tmp); paths elsewhere
+test's private tmpfs mounts (/dev, /data, /mnt, /linkerconfig, /tmp, /sys); paths elsewhere
 are listed, with whether they exist in the read-only tree. Owner and group names are
 resolved by the image's own Bionic (`toybox id` run in the tree), so no id table is
 copied here. Lines with property expansions (`${...}`) are skipped and counted.
+It also creates the cgroup directories named in the image's cgroups.json files (init
+mounts them on a device; libprocessgroup needs them to place system_server). Under the
+test's /sys tmpfs these are plain directories: nothing is grouped or limited.
 
 Usage (as root inside the test's namespace): replay-init-dirs.py TREE_ROOT
 """
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 
-WRITABLE = ("/dev/", "/data/", "/mnt/", "/linkerconfig/", "/tmp/")
+WRITABLE = ("/dev/", "/data/", "/mnt/", "/linkerconfig/", "/tmp/", "/sys/")
 
 
 def rc_files(root):
@@ -91,13 +95,34 @@ def main():
                     os.chown(host, -1 if uid is None else uid, -1 if gid is None else gid)
             except OSError as error:
                 failures.append(f"{' '.join(words)}: {error}")
-    print(f"init dirs: {len(files)} .rc files read; {made} mkdir and {links} symlink replayed under /dev /data /mnt /linkerconfig /tmp")
+    groups = []
+    for relative in ("system/etc/cgroups.json", "vendor/etc/cgroups.json"):
+        path = root / relative
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text())
+        entries = data.get("Cgroups", []) + ([data["Cgroups2"]] if "Cgroups2" in data else [])
+        for entry in entries:
+            paths = [entry.get("Path", "")] + [c.get("Path", "") for c in entry.get("Controllers", [])]
+            for item in paths:
+                if item and item.startswith("/"):
+                    full = item if item.startswith(WRITABLE) else ""
+                    if full:
+                        (root / full.lstrip("/")).mkdir(parents=True, exist_ok=True)
+                        groups.append(full)
+    print(f"cgroup directories from cgroups.json (stand-ins, no controller behind them): {' '.join(groups) or 'none'}")
+    print(f"init dirs: {len(files)} .rc files read; {made} mkdir and {links} symlink replayed under /dev /data /mnt /linkerconfig /tmp /sys")
     print(f"  skipped with property expansions: {len(expanded)}; owner/group names Bionic did not know: {sorted(unknown) or 'none'}")
     for line in failures[:15]:
         print(f"  FAILED {line}")
     missing = sorted(p for p, exists in outside.items() if not exists)
-    print(f"  {len(outside)} paths outside the tmpfs mounts (left alone); missing in the read-only tree ({len(missing)}): "
-          + (" ".join(missing[:40]) or "none"))
+    tops = {}
+    for p in missing:
+        tops["/" + p.strip("/").split("/")[0]] = tops.get("/" + p.strip("/").split("/")[0], 0) + 1
+    print(f"  {len(outside)} paths outside the tmpfs mounts (left alone); missing in the read-only tree, by top folder: "
+          + (" ".join(f"{t}({n})" for t, n in sorted(tops.items())) or "none"))
+    shown = [p for p in missing if not p.startswith(("/config/", "/cache/"))]
+    print("  missing, not under /config or /cache: " + (" ".join(shown[:25]) or "none"))
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5m", below) and paste its output.
+bring-up stage B5n", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -938,24 +938,42 @@ Operationally tested on the M1:
 - Not fatal: `sendto /data/system/unsolzygotesocket` ENOENT (no system_server listener
   yet), `setpriority` EACCES, and capability errors from a helper process (pid 105).
 
-## Next action: bring-up stage B5m, the /mnt directories init creates
+## Results: bring-up stage B5m (`root-smoke-erom1_2t`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5l: the
+- **The init directory replay ran** (operationally tested): 211 `.rc` files read, 268
+  `mkdir` and 10 `symlink` replayed under the tmpfs mounts, 7 lines skipped for property
+  expansions, every owner and group name resolved by the image's Bionic. 140 paths
+  outside the tmpfs mounts are missing from the read-only tree, mostly under
+  `/config/sdcardfs` and `/cache`. `/storage` exists in the tree (mode 0751, group 1028).
+- **system_server got past storage setup:** the trace shows
+  `mount("/mnt/user/0", "/storage", MS_BIND|MS_REC) = 0` in system_server (pid 161).
+- **Next stop: process groups.** `libprocessgroup: Failed to make and chown
+  /sys/fs/cgroup/system/uid_1000`, then `JNI FatalError ... Zygote.cpp:1997:
+  createProcessGroup(1000, 0) failed: No such file or directory`. The test had no `/sys`
+  at all; on a device init mounts sysfs and the cgroup hierarchies listed in
+  `cgroups.json`.
+- Not fatal: missing trace file, aconfig packages `android.xr` and
+  `com.android.scheduling.flags`, the vibrator HAL profile, `setpriority` EACCES, and the
+  crash helper (pid 170/171) failing because strace already traces the process and
+  tombstoned is not running.
+
+## Next action: bring-up stage B5n, stand-in cgroup directories
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5m: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
-(logs, trace); private tmpfs takes the rest, including the new `/mnt` directories, which
-vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no SELinux
-module, no binder device, no partition, boot or flash change.
+(logs, trace). New: a private tmpfs on the tree's `/sys`, which vanishes at exit. Loss:
+none. Reversal: delete the printed directory. No sudo, no SELinux module, no binder
+device, no host sysfs or cgroup, no partition, boot or flash change.
 
-What changes: before zygote starts, the test creates `/mnt/user/0`, `/mnt/runtime/*`,
-`/mnt/expand`, `/mnt/installer`, `/mnt/androidwritable`, `/mnt/pass_through`,
-`/mnt/media_rw` and `/mnt/data_mirror` on the `/mnt` tmpfs, and prints whether
-`/storage` exists in the tree. New section S0b (`asahi/replay-init-dirs.py`) then
-replays every `mkdir` and `symlink` from the `on ...` sections of the image's init
-`.rc` files (system, system_ext, product, vendor, odm, apex) under the tmpfs mounts,
-with their modes and owners, so the remaining missing-directory failures surface
-together instead of one run each. Paths outside the tmpfs mounts are only listed, with
-those missing from the tree. Expected: system_server gets past storage setup and
-stops at a later point, likely its first binder or property-service use.
+What changes: `/sys` inside the test is an empty private tmpfs, and
+`asahi/replay-init-dirs.py` also creates every cgroup path named in the image's
+`cgroups.json` files (for example `/sys/fs/cgroup`). These are plain directories, a
+stand-in: libprocessgroup can create `system/uid_1000/pid_N` and write `cgroup.procs`,
+but nothing is actually grouped or limited. The missing-path list is now grouped by top
+folder. Expected: system_server passes `createProcessGroup` and continues into
+specialization and Java startup. The first binder use is expected after that; binder
+here needs the private binderfs and SELinux domain from the earlier probes, which will
+be its own step.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
