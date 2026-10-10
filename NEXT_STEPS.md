@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): run the chroot smoke test ("Next action:
-bring-up stage B3a", below) and paste its output.
+Bring-up track (separate thread): run the logd and linker-config smoke test ("Next action:
+bring-up stage B3b", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -576,34 +576,53 @@ What this changes in the plan:
   `/system/system_ext/bin/hwservicemanager`; all resolve inside a chroot.
 - Not shown: that any of these run.
 
-## Next action: bring-up stage B3a, chroot smoke test of Bionic, linkerconfig, derive_classpath and ART
+## Results: bring-up stage B3a, chroot smoke test (`root-smoke-v16dwmrq`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: creates one
-small `work/asahi/root-smoke-*` directory (the script, a log, an strace trace of
-the ART start) in your checkout. The extracted tree is mounted read-only in a
-private mount namespace, and private tmpfs mounts over `/dev`, `/data`, `/tmp`,
-`/linkerconfig` and `/mnt` take everything the programs write; they disappear
-when the run ends. Nothing else is written. Loss: none. Reversal: delete the
-printed directory. No sudo, no SELinux module, no binder, no host device except
-bind mounts of the six character devices `null`, `zero`, `full`, `random`,
-`urandom` and `tty`.
+Operationally tested on the M1, no sudo and no SELinux change:
+- The image's `toybox` and `sh` run in a chroot of the extracted tree, with
+  Bionic from the extracted runtime apex. `ls /apex | wc -l` reports 43.
+- Multi-id mapping works: `toybox id` ran as `uid=1036(logd)` and
+  `uid=1000(system)` with the image's own passwd names.
+- `linkerconfig` ran and wrote `/linkerconfig/ld.config.txt` (1053 lines, 65 KB).
+  `apex.libraries.config.txt` is empty (0 bytes), reason not established. After it
+  existed, the "failed to find generated linker configuration" warnings stopped.
+- `derive_classpath` aborted with SIGABRT (signal 6) and wrote no file. Its
+  reason is not in the output; libbase sends it to `logd`, which was absent.
+- `dalvikvm64 -help` failed: `CANNOT LINK EXECUTABLE ... library
+  "libnativehelper.so" not found: needed by main executable`. Not yet known
+  whether the generated config's art namespace lacks the library path or the
+  library sits elsewhere.
+- 16 boot images are in `/system/framework/arm64/` as `boot-<jar>.art` pieces.
+  The scan's search for a file named exactly `boot.art` found one at
+  `/system/framework/arm64/boot.art`; the ART start was skipped for lack of a
+  `BOOTCLASSPATH`.
+- Not shown: any ART start, `logd` running, or any property read.
 
-What it does, each step reported separately (a failing step does not stop the
-next): shell and `toybox` from the image in a chroot; `toybox id` as uid 1036
-and 1000 (tests the multi-id mapping with real service ids); `linkerconfig`
-generating `/linkerconfig/ld.config.txt` from the apexes; `derive_classpath`
-building `BOOTCLASSPATH`; `dalvikvm64 -help`; then a `dalvikvm64` start with the
-system `boot.art` and a main class that does not exist (so success means the VM
-started, loaded its boot image and reached class lookup; "class not found" is
-the expected end). If `strace` is installed, failed opens are listed. This is
-not Android `init`: no property service, no `logd`, no binder, no zygote.
+## Next action: bring-up stage B3b, logd with passed-in sockets, linker config diagnosis, derive_classpath, ART
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B3a:
+one small `work/asahi/root-smoke-*` directory (script, logs, strace traces, a copy
+of the generated linker config); the tree stays mounted read-only and private
+tmpfs mounts take every other write and vanish at exit. Loss: none. Reversal:
+delete the printed directory. No sudo, no SELinux module, no binder.
+
+What it does: re-runs `linkerconfig`; locates `libnativehelper.so` and prints the
+section lines of the generated `ld.config.txt` that mention it and the art apex;
+tries `dalvikvm64 -help` with the generated config and again with none; creates
+`logd`'s three sockets in the private `/dev/socket` the way Android's `init`
+does, passes them to the image's own `logd` through `ANDROID_SOCKET_*` and runs it
+as uid 1036 with its groups; reruns `derive_classpath` under `strace`; prints
+`logcat -d`, which should now contain the abort reason; and, if a
+`BOOTCLASSPATH` file results, tries the ART start with the system boot image and
+a missing main class (success here means the VM started, loaded its image and
+reached class lookup). No `init`, no property service, no binder, no zygote.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-in-root.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-logd-art.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B3a`. It takes up to a few
-minutes; paste the output into the thread titled "Remaining steps to boot
+Its first line reads `=== BRING-UP THREAD, STAGE B3b`. Paste only the command
+output (not the prompt lines) into the thread titled "Remaining steps to boot
 Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
