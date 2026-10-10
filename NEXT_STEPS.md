@@ -407,9 +407,9 @@ I will check before proposing a design), then Android receiving an FD.
 
 ## Run now: stage 6c, what did `gsid` do around each received descriptor? (read-only)
 
-**THIS STEP MODIFIES STORAGE**: it does not. It only reads the trace file
-the stage 6b run already wrote and prints a few lines; nothing is created or changed
-and nothing is executed. (If your shell redirects output, that file is yours.)
+This step does not modify storage: it only reads the trace file the stage 6b run
+already wrote and prints some lines; nothing is created or changed and nothing is
+executed.
 
 ```bash
 cd ~/Gbosm1 && grep -n -B14 'memfd:gbos-android-parcel' work/asahi/real-servicemanager-7bw1u09s/android-runtime/server.trace | cut -c1-240 | head -260
