@@ -9,7 +9,8 @@ test's private tmpfs mounts (/dev, /data, /mnt, /linkerconfig, /tmp, /sys); path
 are listed, with whether they exist in the read-only tree. Owner and group names are
 resolved by the image's own Bionic (`toybox id` run in the tree), so no id table is
 copied here. Lines with property expansions (`${...}`) are skipped and counted.
-It also creates the cgroup directories named in the image's cgroups.json files (init
+It also creates the cgroup directories named in the image's cgroups.json and
+task_profiles.json files, plus <cgroup2 root>/system and /apps (init
 mounts them on a device; libprocessgroup needs them to place system_server). Under the
 test's /sys tmpfs these are plain directories: nothing is grouped or limited.
 
@@ -95,22 +96,40 @@ def main():
                     os.chown(host, -1 if uid is None else uid, -1 if gid is None else gid)
             except OSError as error:
                 failures.append(f"{' '.join(words)}: {error}")
-    groups = []
+    groups, controllers = [], {}
     for relative in ("system/etc/cgroups.json", "vendor/etc/cgroups.json"):
         path = root / relative
         if not path.is_file():
             continue
         data = json.loads(path.read_text())
-        entries = data.get("Cgroups", []) + ([data["Cgroups2"]] if "Cgroups2" in data else [])
-        for entry in entries:
-            paths = [entry.get("Path", "")] + [c.get("Path", "") for c in entry.get("Controllers", [])]
-            for item in paths:
-                if item and item.startswith("/"):
-                    full = item if item.startswith(WRITABLE) else ""
-                    if full:
-                        (root / full.lstrip("/")).mkdir(parents=True, exist_ok=True)
-                        groups.append(full)
-    print(f"cgroup directories from cgroups.json (stand-ins, no controller behind them): {' '.join(groups) or 'none'}")
+        for entry in data.get("Cgroups", []):
+            controllers[entry.get("Controller", "")] = entry.get("Path", "")
+        v2 = data.get("Cgroups2", {})
+        if v2.get("Path"):
+            groups.append(v2["Path"])
+            # libprocessgroup puts system uids under <root>/system and apps under <root>/apps
+            groups += [v2["Path"] + "/system", v2["Path"] + "/apps"]
+            for c in v2.get("Controllers", []):
+                controllers[c.get("Controller", "")] = v2["Path"] + ("" if c.get("Path", ".") == "." else "/" + c["Path"])
+    groups += [p for p in controllers.values() if p]
+    profiles = [root / "system/etc/task_profiles.json", root / "vendor/etc/task_profiles.json"]
+    profiles += sorted((root / "system/etc/task_profiles").glob("*.json")) + sorted((root / "system/etc").glob("task_profiles_*.json"))
+    joins = 0
+    for path in profiles:
+        if not path.is_file():
+            continue
+        for profile in json.loads(path.read_text()).get("Profiles", []):
+            for action in profile.get("Actions", []):
+                params = action.get("Params", {})
+                base = controllers.get(params.get("Controller", ""))
+                if action.get("Name") in ("JoinCgroup", "SetCgroup") and base and params.get("Path", "") not in ("", "."):
+                    groups.append(base + "/" + params["Path"])
+                    joins += 1
+    groups = sorted(set(g for g in groups if g.startswith(WRITABLE)))
+    for g in groups:
+        (root / g.lstrip("/")).mkdir(parents=True, exist_ok=True)
+    print(f"cgroup directories from cgroups.json and {joins} task-profile JoinCgroup actions (stand-ins, no controller behind them): "
+          f"{len(groups)}: {' '.join(groups[:30]) or 'none'}")
     print(f"init dirs: {len(files)} .rc files read; {made} mkdir and {links} symlink replayed under /dev /data /mnt /linkerconfig /tmp /sys")
     print(f"  skipped with property expansions: {len(expanded)}; owner/group names Bionic did not know: {sorted(unknown) or 'none'}")
     for line in failures[:15]:

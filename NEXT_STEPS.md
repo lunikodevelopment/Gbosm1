@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5n", below) and paste its output.
+bring-up stage B5o", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -957,23 +957,35 @@ Operationally tested on the M1:
   crash helper (pid 170/171) failing because strace already traces the process and
   tombstoned is not running.
 
-## Next action: bring-up stage B5n, stand-in cgroup directories
+## Results: bring-up stage B5n (`root-smoke-orxdzeym`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5m: the
-rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
-(logs, trace). New: a private tmpfs on the tree's `/sys`, which vanishes at exit. Loss:
-none. Reversal: delete the printed directory. No sudo, no SELinux module, no binder
-device, no host sysfs or cgroup, no partition, boot or flash change.
+- The `/sys` tmpfs and the `cgroups.json` directories were created (`/dev/blkio`,
+  `/dev/cpuctl`, `/dev/cpuset`, `/sys/fs/cgroup`); the earlier `Failed to get stats for
+  /sys/fs/cgroup` is gone.
+- **Same stop, one level down:** `Failed to make and chown
+  /sys/fs/cgroup/system/uid_1000: No such file or directory`, then
+  `createProcessGroup(1000, 0) failed`. libprocessgroup places system uids under
+  `<cgroup2 root>/system/` (apps under `apps/`) and creates only the last level itself;
+  on a device init creates `system` and `apps` when it sets up cgroups.
+- Missing-path summary: outside the tmpfs mounts the tree lacks `/config` (95),
+  `/metadata` (27), `/data_mirror` (11) and `/cache` (4) paths. These are mount points
+  on a device; nothing has failed on them yet.
 
-What changes: `/sys` inside the test is an empty private tmpfs, and
-`asahi/replay-init-dirs.py` also creates every cgroup path named in the image's
-`cgroups.json` files (for example `/sys/fs/cgroup`). These are plain directories, a
-stand-in: libprocessgroup can create `system/uid_1000/pid_N` and write `cgroup.procs`,
-but nothing is actually grouped or limited. The missing-path list is now grouped by top
-folder. Expected: system_server passes `createProcessGroup` and continues into
-specialization and Java startup. The first binder use is expected after that; binder
-here needs the private binderfs and SELinux domain from the earlier probes, which will
-be its own step.
+## Next action: bring-up stage B5o, cgroup subfolders and task-profile folders
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5n: the
+rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory (logs,
+trace); private tmpfs mounts on `/dev`, `/data`, `/mnt`, `/sys` and others take the rest
+and vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no
+SELinux module, no binder device, no host sysfs or cgroup, no partition, boot or flash
+change.
+
+What changes: `asahi/replay-init-dirs.py` now also creates `<cgroup2 root>/system` and
+`/apps`, and one folder for every `JoinCgroup` action in the image's
+`task_profiles.json` files (for example `/dev/cpuset/foreground`), so task-profile
+moves of system_server's threads find their folders too. All remain stand-in
+directories. Expected: system_server passes `createProcessGroup` and reaches Java
+startup; its first binder use will be a separate step.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
