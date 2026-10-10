@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6i", below) and paste its output.
+bring-up stage B6j", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1138,7 +1138,67 @@ earlier stages), which an apexd that checks it could read as "boot already finis
   'vold'") and carried on without it. Its `/dev/device-mapper` failure did not stop it.
 - apexd opened `/dev/binder` itself; binder calls succeeded.
 
-## Next action: bring-up stage B6i, apexd started on demand like init
+## Results: bring-up stage B6i (`root-smoke-vmfd28_g`; reported by the user)
+
+- **apexservice works** (operationally tested): system_server's first
+  `ctl.interface_start=aidl/apexservice` made the stand-in start apexd (one start; 5 later
+  requests found it running). apexd registered `apexservice`, answered `getActivePackages`,
+  went from 1 client to 0, then unregistered and exited 0, as a lazy service should.
+- system_server got past `PlatformCompat`. `service list` showed 8 services: new are
+  `platform_compat`, `platform_compat_native`, `file_integrity`, `device_identifiers` and
+  `uri_grants`. SystemServiceManager started `DeviceIdentifiersPolicyService` and
+  `UriGrantsManagerService`, then `PowerStatsService`.
+- **New stop:** its main thread waits for the vendor HAL
+  `android.hardware.power.stats.IPowerStats/default` ("Waited one second", 36
+  `ctl.interface_start` requests, which the stand-in only logged). A background thread
+  repeats `Installer: installd not found; trying again`.
+- The `/dev/kmsg` FIFO worked: no lines were lost. Other kmsg lines: servicemanager
+  `Starting sm instance on /dev/binder` and SELinux "Multiple same specifications" warnings
+  from the service contexts. No enforced SELinux denials; the module was removed.
+
+## Next action: bring-up stage B6j, start .rc services on request like init, and installd
+
+**THIS STEP MODIFIES STORAGE.** Scope, loss and reversal are as in B6i:
+- One new `work/asahi/root-smoke-*` directory (logs, traces, the stubs, a policy file, a
+  labelled copy of the image's servicemanager that the run deletes, and a small
+  `start-service.sh`) and the rewritten `apex/apex-info-list.xml`.
+- **Host SELinux policy, temporarily:** `sudo semodule -i` installs the `gbos_binder_probe`
+  module (only `gbos_binder_probe_t` permissive); `sudo chcon` labels the servicemanager
+  copy; `sudo prlimit` raises nice/rtprio limits for the run's own processes. Fedora stays
+  enforcing.
+- Private binderfs and tmpfs mounts vanish with the namespace.
+
+Possible loss: none. Reversal: the run removes the module itself, even after a failure, and
+prints whether that worked. If it was interrupted, run `sudo semodule -r gbos_binder_probe`,
+then delete the printed directory. No partition, boot, flash or enforcement change; no host
+device beyond the private binderfs (the services see only the sandbox `/dev`).
+
+What changes from B6i:
+- The property stand-in reads the image's `.rc` files (system, system_ext, product, vendor,
+  odm, apexes). For `ctl.interface_start=X` it finds the service whose `interface` line
+  declares X, and for `ctl.start=NAME` the service of that name, and runs that service's
+  command line through `start-service.sh` (own mount namespace, chroot, strace, one trace
+  per start). At most one instance per service runs, as with apexd in B6i. apexd now goes
+  through the same path. Services run as the sandbox's root; init would switch to the
+  `.rc` user and group, which this does not replicate.
+- installd (an ordinary class-main service on a device) is started upfront after
+  servicemanager, from its `.rc` command line.
+- The output lists every service started and every request no `.rc` file declares, which
+  services are running at the end, how each trace ended, each service's own output, and
+  logcat lines from installd and the HALs.
+
+Expected: the image's power-stats HAL starts. It may register and let system_server
+continue, or fail on hardware it cannot reach (its log will say). Either result is reported
+as seen; nothing assumes the HAL works on the M1.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --binder
+```
+
+sudo may ask for your password. The first line reads `=== BRING-UP THREAD, STAGE B6j`.
+Paste only the command output into this thread, "Remaining steps to boot Android".
+
+## Previous action (done): bring-up stage B6i, apexd started on demand like init
 
 **THIS STEP MODIFIES STORAGE.** Scope, loss and reversal are as in B6e/B6f:
 - One new `work/asahi/root-smoke-*` directory (logs, traces, the stubs, a policy file, a

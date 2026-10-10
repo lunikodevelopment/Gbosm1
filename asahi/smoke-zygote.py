@@ -65,17 +65,19 @@ say "S0b every mkdir and symlink of the image's init .rc files, replayed under t
 "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
 say "S0c stand-ins: property service socket, and the selinux_android_setcon stub for zygote"
-# apexd is a lazy service (B6h: it registered apexservice, saw no client and exited 0); init starts it again on
-# each ctl.interface_start=aidl/apexservice, so the stand-in does the same with this script (one instance at a time)
-STARTRULES=()
+# Services started on request, as init does: apexd is a lazy service (B6h: it exits when it has no client) and
+# system_server asks for HALs with ctl.interface_start (B6i: IPowerStats). The stand-in looks the request up in the
+# image's .rc files and runs the service through this launcher: own mount namespace, chroot, strace, one at a time.
+# Services run as the namespace's root (init would switch to the .rc user/group); they see only the sandbox /dev.
+SVCENV=()
 if [ -n "$SMCTX" ]; then
-  if command -v strace >/dev/null 2>&1; then ATR="strace -f -s 160 -o $OUT/apexd-\$(date +%s%N).trace"; else ATR=""; fi
-  printf '#!/bin/bash\nexec unshare --mount --propagation private %s chroot "%s" /system/bin/toybox env -i %s /system/bin/apexd >> "%s/apexd.out" 2>&1\n' \
-    "$ATR" "$ROOT" "${BASEENV[*]}" "$OUT" > "$OUT/start-apexd.sh"
-  chmod 0755 "$OUT/start-apexd.sh"
-  STARTRULES=("ctl.interface_start=aidl/apexservice=$OUT/start-apexd.sh")
+  if command -v strace >/dev/null 2>&1; then ATR="strace -f -s 160 -o $OUT/svc-\$NAME-\$(date +%s%N).trace"; else ATR=""; fi
+  printf '#!/bin/bash\nNAME="$1"; shift\nexec unshare --mount --propagation private %s chroot "%s" /system/bin/toybox env -i %s "$@" >> "%s/svc-$NAME.out" 2>&1\n' \
+    "$ATR" "$ROOT" "${BASEENV[*]}" "$OUT" > "$OUT/start-service.sh"
+  chmod 0755 "$OUT/start-service.sh"
+  SVCENV=(GBOS_RC_ROOT="$ROOT" GBOS_LAUNCHER="$OUT/start-service.sh")
 fi
-"$PY" "$(dirname "$ZYG")/sandbox-property-service.py" "$ROOT/dev/__properties__" "$ROOT/dev/socket/property_service" "$OUT/property-sets.log" "${STARTRULES[@]}" &
+env "${SVCENV[@]}" "$PY" "$(dirname "$ZYG")/sandbox-property-service.py" "$ROOT/dev/__properties__" "$ROOT/dev/socket/property_service" "$OUT/property-sets.log" &
 PROPPID=$!
 sleep 1
 ls -l "$ROOT/dev/socket/property_service" 2>&1 | cut -c1-120
@@ -122,8 +124,13 @@ if [ -n "$SMCTX" ]; then
     head -n 10 "$OUT/servicemanager.out" | cut -c1-220
     echo "servicemanager domain: $(cat "$ROOT"/proc/[0-9]*/attr/current 2>/dev/null | tr '\0' '\n' | grep -m1 gbos_binder_probe_t || echo 'not seen')"
   else echo "binderfs mount FAILED"; fi
-  say "S1c apexd: not started upfront; the property stand-in starts $OUT/start-apexd.sh on ctl.interface_start=aidl/apexservice"
-  sed 's/^/  /' "$OUT/start-apexd.sh" | cut -c1-220
+  say "S1c services from the image's .rc files: started by the property stand-in on ctl.interface_start/ctl.start; installd upfront"
+  sed 's/^/  /' "$OUT/start-service.sh" | cut -c1-240
+  # installd is an ordinary (not lazy) class-main service on a device; system_server polls for it ("installd not found")
+  INSTALLD=$("$PY" "$(dirname "$ZYG")/sandbox-property-service.py" --print-service "$ROOT" installd 2>&1)
+  echo "installd command line from the .rc files: $INSTALLD"
+  case "$INSTALLD" in /*) "$OUT/start-service.sh" installd $INSTALLD & sleep 2
+    if kill -0 $! 2>/dev/null; then echo "installd still running"; else echo "installd EXITED"; head -n 5 "$OUT/svc-installd.out" | cut -c1-200; fi;; esac
   APEXDPID=on-demand
 fi
 
@@ -185,19 +192,24 @@ sed -E 's/ \((updated|added)\)$//' "$OUT/property-sets.log" 2>/dev/null | awk '{
 echo "--- system_server lines in logcat (last 25):"
 timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' (SystemServer|SystemServiceManager|ServiceManager|servicemanager|system_server|Looper|ActivityManager|PackageManager)' | grep -v 'runtime.cc:769' | tail -n 25 | cut -c1-260
 if [ -n "$APEXDPID" ]; then
-  echo "--- apexd instances started by the property stand-in, and apexd processes running now:"
-  grep -a 'apexservice' "$OUT/property-sets.log" | grep -v -E 'already running|nothing started' | cut -c1-200 | head -n 10
-  for p in "$ROOT"/proc/[0-9]*; do grep -q -a '^/system/bin/apexd' "$p/cmdline" 2>/dev/null && echo "running: pid ${p##*/}"; done
-  echo "--- apexd and lazy-service messages in /dev/kmsg (first 40, without the pre-installed APEX list):"
-  grep -a -E 'apexd|LazyServiceRegistrar' "$OUT/kmsg.log" | grep -v 'Found pre-installed APEX' | head -n 40 | cut -c1-240
-  echo "--- other processes' /dev/kmsg messages (first 15):"
-  grep -a -v -E 'apexd|LazyServiceRegistrar' "$OUT/kmsg.log" | head -n 15 | cut -c1-240
-  echo "--- how each apexd trace ended:"
-  for t in "$OUT"/apexd-*.trace; do [ -s "$t" ] && echo "${t##*/}: $(grep -E '^[0-9]+ +\+\+\+ (exited|killed)' "$t" | tail -n 1 | cut -c1-120)"; done 2>/dev/null | head -n 10
-  echo "--- apexd mount, loop and device-mapper calls (all traces, first 10):"
-  cat "$OUT"/apexd-*.trace 2>/dev/null | grep -E '(mount|umount2)\(|loop|device-mapper|/dev/block' | cut -c1-200 | head -n 10
+  echo "--- services the property stand-in started (first start per service, and any restart):"
+  grep -a -E '\(started ' "$OUT/property-sets.log" | sed -E 's/^OK   //' | cut -c1-220 | head -n 20
+  grep -a -c 'no .rc service declares' "$OUT/property-sets.log" | sed 's/^/requests no .rc service declares: /'
+  grep -a 'no .rc service declares' "$OUT/property-sets.log" | sort -u | head -n 5 | cut -c1-200
+  echo "--- processes started from the .rc files, running now:"
+  for p in "$ROOT"/proc/[0-9]*; do c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null); case "$c" in /system/*|/vendor/*|/apex/*|/system_ext/*|/odm/*) echo "${p##*/} $c" | cut -c1-140;; esac; done | grep -v -E ' /system/bin/(logd|servicemanager|toybox)' | head -n 15
+  echo "--- how each service trace ended:"
+  for t in "$OUT"/svc-*.trace; do [ -s "$t" ] && echo "${t##*/}: $(grep -E '^[0-9]+ +\+\+\+ (exited|killed)' "$t" | tail -n 1 | cut -c1-120)"; done 2>/dev/null | head -n 15
+  echo "--- service stdout/stderr (first 5 lines each):"
+  for f in "$OUT"/svc-*.out; do [ -s "$f" ] && { echo "${f##*/}:"; grep -v linkerconfig "$f" | head -n 5 | cut -c1-200; }; done 2>/dev/null
+  echo "--- apexd and lazy-service messages in /dev/kmsg (first 25, without the pre-installed APEX list):"
+  grep -a -E 'apexd|LazyServiceRegistrar' "$OUT/kmsg.log" | grep -v -E 'Found pre-installed APEX|Scanning /' | head -n 25 | cut -c1-240
+  echo "--- other /dev/kmsg messages, without SELinux duplicate-specification warnings (first 15):"
+  grep -a -v -E 'apexd|LazyServiceRegistrar|Multiple same specifications' "$OUT/kmsg.log" | head -n 15 | cut -c1-240
+  echo "--- logcat lines from installd, power stats and other started HALs (last 25):"
+  timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -i -E ' (installd|powerstats|power.stats|android.hardware|vendor\.)' | grep -v 'Waited one second' | tail -n 25 | cut -c1-240
 fi
-pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID "$KMSGPID" 2>/dev/null; pkill -f "$OUT/start-apexd.sh" 2>/dev/null
+pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID "$KMSGPID" 2>/dev/null
 echo; echo "steps finished"
 '''
 
@@ -439,7 +451,7 @@ def main():
         sys.exit("run as your ordinary user, without sudo")
     binder = "--binder" in sys.argv[1:]
     system_server = binder or "--system-server" in sys.argv[1:]
-    print("=== BRING-UP THREAD, STAGE " + ("B6i" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE " + ("B6j" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")

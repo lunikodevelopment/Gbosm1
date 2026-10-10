@@ -23,6 +23,11 @@ appended to LOG_FILE.
 
 Usage: sandbox-property-service.py AREA_FILE SOCKET_PATH LOG_FILE [NAME=VALUE=PROGRAM ...]
 e.g. ctl.interface_start=aidl/apexservice=/path/start-apexd.sh. Runs until killed.
+With GBOS_RC_ROOT (the tree) and GBOS_LAUNCHER (a program run as LAUNCHER SERVICE ARGV...)
+set, a ctl.interface_start / ctl.start request without an explicit rule is looked up in the
+image's .rc files (the service whose `interface` line or name matches, as init does) and that
+service's command line is passed to the launcher; again at most one instance per service.
+       sandbox-property-service.py --print-service TREE NAME   prints that service's command line.
 """
 import os
 import socket
@@ -115,24 +120,65 @@ def read_exact(conn, count):
     return data
 
 
+def rc_services(root):
+    """name -> argv, and interface key -> name, from the image's init .rc files."""
+    root = os.path.abspath(root)
+    files = [os.path.join(root, "system/etc/init/hw/init.rc")]
+    for d in ("system/etc/init", "system_ext/etc/init", "product/etc/init", "vendor/etc/init", "odm/etc/init"):
+        for base, _, names in sorted(os.walk(os.path.join(root, d))):
+            files += [os.path.join(base, n) for n in sorted(names) if n.endswith(".rc")]
+    apex = os.path.join(root, "apex")
+    for name in sorted(os.listdir(apex)) if os.path.isdir(apex) else []:
+        etc = os.path.join(apex, name, "etc")
+        files += [os.path.join(etc, n) for n in sorted(os.listdir(etc)) if n.endswith(".rc")] if os.path.isdir(etc) else []
+    services, interfaces, current = {}, {}, None
+    for path in files:
+        if not os.path.isfile(path):
+            continue
+        with open(path, errors="replace") as handle:
+            for raw in handle:
+                words = raw.split()
+                if not words or words[0].startswith("#"):
+                    continue
+                if words[0] in ("on", "import"):
+                    current = None
+                elif words[0] == "service" and len(words) > 2:
+                    current = words[1]
+                    services.setdefault(current, words[2:])
+                elif current and words[0] == "interface" and len(words) > 2:
+                    key = "aidl/" + words[2] if words[1] == "aidl" else words[1] + "/" + words[2]
+                    interfaces.setdefault(key, current)
+    return services, interfaces
+
+
 class Starter:
     """Runs a program for a ctl.* request, at most one instance at a time (like init's on-demand services)."""
 
     def __init__(self, rules, log):
         self.rules, self.log, self.running, self.lock = rules, log, {}, threading.Lock()
+        self.launcher = os.environ.get("GBOS_LAUNCHER")
+        self.services, self.interfaces = rc_services(os.environ["GBOS_RC_ROOT"]) if os.environ.get("GBOS_RC_ROOT") else ({}, {})
 
     def handle(self, request):
         program = self.rules.get(request)
-        if not program:
-            return "control request logged; nothing started (stand-in)"
+        if program:
+            key, command = program, [program]
+        else:
+            name, _, value = request.partition("=")
+            service = (self.interfaces.get(value) if name == "ctl.interface_start" else
+                       value if name == "ctl.start" and value in self.services else None)
+            if not service or not self.launcher:
+                return ("no .rc service declares it; nothing started" if self.launcher and name in ("ctl.interface_start", "ctl.start")
+                        else "control request logged; nothing started (stand-in)")
+            key, command = service, [self.launcher, service] + self.services[service]
         with self.lock:
-            process = self.running.get(program)
+            process = self.running.get(key)
             if process and process.poll() is None:
                 return f"already running (pid {process.pid})"
             exited = "" if not process else f"; previous instance exited with {process.returncode}"
-            self.running[program] = subprocess.Popen([program], stdin=subprocess.DEVNULL,
-                                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return f"started {os.path.basename(program)} (pid {self.running[program].pid}){exited}"
+            self.running[key] = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return f"started {' '.join(command[1:] if not program else command)[:120]} (pid {self.running[key].pid}){exited}"
 
 
 def serve(conn, area, log, starter):
@@ -160,6 +206,12 @@ def serve(conn, area, log, starter):
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "--print-service":
+        services, _ = rc_services(sys.argv[2])
+        if sys.argv[3] not in services:
+            sys.exit(f"no .rc service named {sys.argv[3]}")
+        print(" ".join(services[sys.argv[3]]))
+        return
     if len(sys.argv) < 4:
         sys.exit(__doc__)
     area = Area(sys.argv[1])
@@ -182,7 +234,9 @@ def main():
     server.bind(sys.argv[2])
     os.chmod(sys.argv[2], 0o666)
     server.listen(64)
-    log("property service stand-in listening" + "".join(f"; starts {os.path.basename(v)} on {k}" for k, v in rules.items()))
+    log("property service stand-in listening" + "".join(f"; starts {os.path.basename(v)} on {k}" for k, v in rules.items())
+        + (f"; starts .rc services through {os.path.basename(starter.launcher)} ({len(starter.services)} services,"
+           f" {len(starter.interfaces)} interfaces declared)" if starter.launcher else ""))
     while True:
         conn, _ = server.accept()
         threading.Thread(target=serve, args=(conn, area, log, starter), daemon=True).start()
