@@ -59,12 +59,16 @@ say "S0c stand-ins: property service socket, and the selinux_android_setcon stub
 PROPPID=$!
 sleep 1
 ls -l "$ROOT/dev/socket/property_service" 2>&1 | cut -c1-120
-PREENV=()
-if [ -f "$OUT/libgbos-setcon-shim.so" ]; then
-  mkdir -p "$ROOT/data/local/tmp/gbos" && cp "$OUT/libgbos-setcon-shim.so" "$ROOT/data/local/tmp/gbos/"
-  PREENV=(LD_PRELOAD=/data/local/tmp/gbos/libgbos-setcon-shim.so)
-  echo "zygote will preload /data/local/tmp/gbos/libgbos-setcon-shim.so"
-else echo "NOTE: no setcon stub was built; system_server will stop at selinux_android_setcon again"; fi
+PREENV=(); PRELOADS=""
+mkdir -p "$ROOT/data/local/tmp/gbos"
+for lib in libgbos-setcon-shim.so libgbos-ashmem-shim.so; do
+  if [ -f "$OUT/$lib" ]; then cp "$OUT/$lib" "$ROOT/data/local/tmp/gbos/"; PRELOADS="${PRELOADS:+$PRELOADS:}/data/local/tmp/gbos/$lib"
+  else echo "NOTE: $lib was not built"; fi
+done
+[ -n "$PRELOADS" ] && PREENV=(LD_PRELOAD="$PRELOADS") && echo "zygote will preload $PRELOADS"
+echo "what the image's libcutils says about shared memory (strings) and the related properties:"
+strings -n 6 "$ROOT/system/lib64/libcutils.so" 2>/dev/null | grep -i -E 'ashmem|memfd' | head -n 14 | cut -c1-140
+grep -h -E '^(sys.use_memfd|ro.treble.enabled)=' "$ROOT"/system/build.prop "$ROOT"/vendor/build.prop "$ROOT"/system_ext/etc/build.prop "$ROOT"/product/etc/build.prop 2>/dev/null
 
 say "S1 linkerconfig first (no logd yet), then logd under the generated config"
 timeout 120 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig 2>&1 | head -n 5
@@ -413,14 +417,14 @@ def main():
     print("(script, logs, a trace of file and network calls, perhaps tens of MB). The tree is mounted read-only during the run;")
     print("tmpfs mounts hold everything else and vanish at exit. Delete the directory to reverse.")
     out = Path(tempfile.mkdtemp(prefix="root-smoke-", dir="work/asahi")).resolve()
-    shim = out / "libgbos-setcon-shim.so"
     if shutil.which("clang") and shutil.which("ld.lld"):
-        built = subprocess.run(["clang", "--target=aarch64-linux-android35", "-shared", "-nostdlib", "-fPIC", "-O2",
-                                "-fuse-ld=lld", "-Wl,-z,max-page-size=16384", "-Wl,-soname,libgbos-setcon-shim.so",
-                                str(HERE / "sandbox-setcon-shim.c"), "-o", str(shim)], capture_output=True, text=True)
-        print(f"setcon stub build exit status: {built.returncode} {built.stderr.strip()[:300]}")
+        for name, source in (("libgbos-setcon-shim.so", "sandbox-setcon-shim.c"), ("libgbos-ashmem-shim.so", "sandbox-ashmem-shim.c")):
+            built = subprocess.run(["clang", "--target=aarch64-linux-android35", "-shared", "-nostdlib", "-fPIC", "-O2",
+                                    "-fuse-ld=lld", "-Wl,-z,max-page-size=16384", f"-Wl,-soname,{name}",
+                                    str(HERE / source), "-o", str(out / name)], capture_output=True, text=True)
+            print(f"{name} build exit status: {built.returncode} {built.stderr.strip()[:300]}")
     else:
-        print("NOTE: clang or ld.lld missing; the setcon stub is not built")
+        print("NOTE: clang or ld.lld missing; the stubs are not built")
     script = out / "run.sh"
     script.write_text(SCRIPT)
     smctx, entry, installed = "", None, False

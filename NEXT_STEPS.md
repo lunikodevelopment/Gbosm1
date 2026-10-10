@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6c", below) and paste its output.
+bring-up stage B6d", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1038,7 +1038,28 @@ Operationally tested on the M1:
   including the binder device and the property area.
 - The temporary module was removed again.
 
-## Next action: bring-up stage B6c, priority limits for the run
+## Results: bring-up stage B6c (`root-smoke-ll8i7nyh`; reported by the user)
+
+- **Priority limits worked** (operationally tested): `NICE 40 40`, `RTPRIO 99 99`; the
+  `setpriority` EACCES lines are gone and system_server passed `setThreadPriority(-2)`.
+- system_server got further: `SystemServer: Reading configuration...`, `SystemConfig`
+  read the permission XML files of the system partitions and apexes, and `incfs` reported
+  `isFsAvailable: false`.
+- **Stop:** `E ashmem: Unable to stat ashmem device: No such file or directory`, then
+  `java.lang.RuntimeException: Failed to create ashmem` at
+  `ApplicationSharedMemory.create` (`SystemServer.java:989`). In AOSP's
+  `libcutils/ashmem-dev.cpp`, memfd is used only when `ro.treble.enabled` and
+  `sys.use_memfd` are true and the kernel also accepts ashmem ioctls on a memfd (an
+  Android kernel addition); otherwise it opens `/dev/ashmem<boot_id>`. Fedora's kernel has
+  neither (ashmem was removed from mainline Linux in 5.18). The image's message wording
+  differs from the AOSP mirror, so its exact code is not confirmed; the next run prints
+  its libcutils strings and the two properties.
+- Not fatal: `memevent listener MemBpfRingbuf init failed` (`/sys/fs/bpf`), aconfig
+  package `android.permission.flags` not found.
+- `service list` after the run: `Found 1 services: manager` (system_server registered
+  nothing before it stopped). No enforced SELinux denials; the module was removed.
+
+## Next action: bring-up stage B6d, ashmem stand-in
 
 Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
 October 2026).
@@ -1061,7 +1082,15 @@ was interrupted, run `sudo semodule -r gbos_binder_probe`, then delete the print
 directory. No partition, boot, flash or enforcement change; no host device beyond the
 private binderfs.
 
-What changes from B6b: right after installing the module the run raises `RLIMIT_NICE`
+What changes from B6c: a second dependency-free preload library,
+`asahi/sandbox-ashmem-shim.c` (test-only), provides libcutils' `ashmem_create_region`,
+`ashmem_set_prot_region`, `ashmem_get_size_region`, `ashmem_pin_region`,
+`ashmem_unpin_region` and `ashmem_valid` following the memfd branch of AOSP's
+`ashmem-dev.cpp` (memfd plus seals; it does not set errno). zygote preloads both stubs.
+The run also prints the image's libcutils strings about ashmem/memfd and the
+`sys.use_memfd` / `ro.treble.enabled` values from the build.prop files.
+
+Earlier change (B6c): right after installing the module the run raises `RLIMIT_NICE`
 to 40 (allows nice -20) and `RLIMIT_RTPRIO` to 99 for its own process tree with `sudo
 prlimit --pid <the script's pid>`, and prints the resulting limits. This changes no
 configuration file; the limits end with that process. When servicemanager is running the
