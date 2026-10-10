@@ -1286,6 +1286,33 @@ own modifier does too. Both passing supports allocating through Mesa's GBM
 around. This does not test Android, Bionic, scanout or fences between
 processes.
 
+### Next after stage 1: Graphics stage 2a, toolchain check for an Android Honeykrisp build
+
+Can run before or after stage 1. Stage 2 builds Honeykrisp (Mesa's Asahi
+Vulkan driver) for Android so the image's ANGLE can run on it. The proposed
+build host is now this Fedora machine rather than the Mac: Fedora's own mesa
+source package matches the running driver and kernel uAPI exactly, and the
+Asahi driver's build may need host compiler tools (LLVM, SPIR-V translator,
+libclc) that Fedora packages natively. Whether those are needed for this Mesa
+version, and how Fedora configures them, is what this check reads. It is an
+inference until the report confirms it.
+
+**THIS STEP MODIFIES STORAGE**
+
+Creates one new `work/asahi/mesa-toolchain-*` directory and downloads Fedora's
+mesa source RPM (about 40 MB, an estimate) into it; delete the directory to
+reverse. Nothing is installed or built.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/check-mesa-android-toolchain.sh
+```
+
+Send the printed `report.txt`. It lists installed and available build tools,
+any Android NDK found, the mesa SRPM's meson options, and the Asahi and Android
+build requirements in that exact source. The build script for stage 2 will be
+written from it.
+
 ### Result: Honeykrisp extensions (step 1)
 
 Reported by the user from the saved `work/asahi/results-7EXxM0au/capabilities.log`
