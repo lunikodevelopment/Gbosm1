@@ -4,52 +4,66 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: native Honeykrisp readback passed; recovery and graphics audits
-completed. All 34 follow-up ELF samples, including Android linker64 and Bionic,
-meet ARM64/16 KiB load alignment. Qualcomm graphics adaptation remains required.
-Next action: execute only the extracted Android Toybox `uname` applet through
-the image's Android linker on the existing Fedora kernel.
+Current status: Android Toybox executed through its Android Bionic linker on
+Fedora Asahi ARM64/16 KiB (`BIONIC_UNAME=PASS`, exit 0). Native Honeykrisp
+readback also passed. Qualcomm graphics adaptation remains required.
+Next action: exchange a verified payload over a private Binder device between
+two native Linux processes on the existing Asahi kernel.
 
-## One command: minimal Bionic execution milestone
+## One command: private Binder echo milestone
 
 **THIS STEP MODIFIES STORAGE**
 
 The Git pull updates tracked source files in `~/Gbosm1` on the home filesystem,
 preserving history and stopping on conflicts. Retain local changes.
-The probe creates a new `work/asahi/bionic-probe-*` directory containing
-extracted runtime files, library candidates and logs. Temporary runtime APEX
-copies are removed automatically. Existing reports and the source image are
-retained. Possible loss is disk space consumed by these new files; tracked
-source versions are updated by Git. Delete only the newly printed result
-directory to reverse probe writes; source versions remain recoverable in Git.
+The command creates a new `work/asahi/binder-probe-*` directory containing a
+compiled probe, report and logs. Existing files are retained. Possible loss is
+disk space used by these new files and tracked source versions updated by Git.
+Delete only the newly printed result directory to reverse generated files;
+source versions remain recoverable through Git.
+
+During execution it creates new user/mount namespaces and mounts a temporary
+binderfs instance inside them at the new result directory's `binderfs` path.
+Mount propagation is private. It allocates only its own `asahi-echo` Binder
+device and registers its own context manager there. The mount is removed on
+success or when the namespaces exit. The host mount table and existing Binder
+contexts are retained. No persistent system configuration is needed.
 
 Run as `gbos_user`, without sudo:
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-bionic.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py
 ```
 
-The script uses the latest completed graphics audit and revalidates GPT/LP
-metadata. It copies the runtime linker, Bionic libc/libm/libdl and Toybox from
-the existing image. It inspects their ARM64/16 KiB alignment, follows DT_NEEDED
-into candidate `/system/lib64` libraries and stops on missing or malformed
-candidates. `ld-android.so` is supplied by the Android linker itself.
-No host glibc libraries are substituted. Copies are bounded to 512 MiB for the
-runtime APEX and its payload, and 64 MiB per binary/library, with at most 64
-library entries. Allow several GiB of temporary/report capacity.
+The runner uses the existing native C compiler and util-linux `unshare`.
+It builds against installed Linux UAPI headers (`linux/android/binder.h` and
+`linux/android/binderfs.h`); it does not install packages or compile a kernel.
+It checks Binder protocol and maps a driver buffer, then forks an echo server
+and client. The client sends a transaction to handle 0; the server verifies the
+payload and replies; the client verifies the same payload and frees the buffer.
 
-After extraction, it invokes the copied Android linker explicitly with a local
-library search path and **only `toybox uname -a`**, as your ordinary user.
-The program reports the Fedora host kernel. No Android init, services, HALs,
-mounts, chroot or system installation are needed. Execution has a 20-second
-limit. The Fedora SELinux policy remains enforced; if execution is denied,
-retain the diagnostic rather than changing permissions or enforcement.
+Root capabilities exist only inside the newly mapped user namespace. Fedora
+SELinux stays enforced. If namespace creation, binderfs mounting, context-manager
+registration or compilation fails, send the diagnostics; do not add sudo,
+change device permissions or disable enforcement. Execution is bounded by
+alarms and a 30-second runner timeout.
 
-Send `report.txt` and `summary.json` from the printed directory. If it stops,
-send the error and any report it created. `BIONIC_UNAME=PASS` and exit 0 establish
-only this small Android userspace execution milestone. They do not establish
-Android boot, complete linker namespace compatibility, Binder transactions,
-HAL operation or graphics integration. This probe has not yet run on the target.
+Send `report.txt` and `summary.json` from the printed directory.
+`BINDER_ECHO=PASS` and exit 0 establish native Linux Binder transaction/reply
+operation only. Android libbinder, servicemanager, SELinux integration and HAL
+operation remain untested. This new probe has not yet run on the target.
+
+## Completed Bionic execution
+
+Retain `/home/gbos_user/Gbosm1/work/asahi/bionic-probe-lf6jtryp`.
+Twelve extracted ELF files met ARM64/16 KiB alignment. Android Toybox `uname -a`
+ran through the recovery image's linker with the extracted Bionic/system
+libraries and returned exit 0 on kernel `7.1.6-400.asahi.fc44.aarch64+16k`.
+The missing `/linkerconfig/ld.config.txt` warning was nonfatal for this command.
+The local library search path supported this invocation; complete Android
+linker namespace configuration has not been established. No host linkerconfig
+files should be created from this warning alone. The completed probe does not
+need to be rerun.
 
 ## Completed image audits
 
@@ -96,7 +110,8 @@ User-supplied Fedora output on 10 October 2026 establishes:
 | Android properties | A-side system/vendor/product/system_ext report Android 17, SDK 37/37.1, build 16471258 | System/vendor security patch 2026-09-01; vendor board API 202604 and first API level 37. Image facts, not runtime boot evidence. |
 | system_b | EROFS with system-other-odex-marker and auxiliary directory roots; no candidate build properties | Suggests precompiled auxiliary content; boot/slot role remains unverified. |
 | ELF samples | 15 core/vendor graphics binaries are ARM64 and satisfy 16 KiB PT_LOAD alignment | Static sample only; runtime APEX and complete userspace compatibility remain unverified. |
-| Runtime follow-up | 30 vendor dependency ELF files and 4 runtime APEX ELF files meet ARM64/16 KiB alignment; exit 0, zero reported unresolved findings | Static collection only; Android binary execution is the next milestone. |
+| Runtime follow-up | 30 vendor dependency ELF files and 4 runtime APEX ELF files meet ARM64/16 KiB alignment; exit 0, zero reported unresolved findings | Static collection only. |
+| Bionic execution | Android linker + Toybox uname ran successfully; 12 extracted ELF files meet ARM64/16 KiB alignment | Operational userspace execution for this applet only; missing generated linker configuration was nonfatal. |
 | VINTF | 81 XML files collected; vendor target-level 202604 | Enumeration only; full VINTF compatibility and runtime operation untested. |
 | Core graphics declarations | Allocator AIDL v2, composer3 AIDL v5, native mapper 5.0/qti | Versions fall within framework matrix 202604 ranges (allocator 1–3, composer3 4–5, mapper 5.0); no full compatibility pass. |
 | Vendor graphics dependencies | Adreno Vulkan; QTI allocator/mapper; DRM-named composer requires libsdmcore, libgralloc.qti and QTI snapalloc | Hardware-specific dependency evidence. These paths need replacement/adaptation for Asahi; 16 KiB alignment does not establish driver compatibility. |
@@ -113,10 +128,10 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Establish minimal Bionic execution using the command above, then select an
-   Asahi allocator/mapper/composer and Android Mesa development milestone.
-2. Validate Android kernel interfaces and choose a native vendor/HAL milestone
-   using matching Asahi kernel sources and driver ABI.
+1. Establish native Binder transaction/reply operation using the command above,
+   then choose Android libbinder/servicemanager integration from that evidence.
+2. Select an Asahi allocator/mapper/composer and Android Mesa development
+   milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
    integration has been demonstrated.
 
