@@ -13,9 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 8b" below (the stage 8a
-command again, with the library search widened), then paste its output.
-Stage 8a (below) registered six more services.
+Next action: none for you right now. Stage 8b passed (below); the next stage
+waits on a direction decision in the thread.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -406,7 +405,22 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: stage 8b, the stage 8a command again with a wider library search
+## Results: stage 8b (`real-servicemanager-wn7agd9c`)
+
+Operationally tested on the user's M1 (output read):
+- The three missing libraries were in `vendor_a:/lib64/hw` (plus one more
+  dependency of `libec_executor`). With them, nine of twelve programs registered
+  and answered the interface-descriptor call: amp calibration, camera-tool, ec,
+  futility, i2c, keyboard proxy, vpd, demura file finder and servicetracker.
+  Counting stage 6 (`disk_info`, `gsiservice`) and stage 7 (five), sixteen
+  distinct image services have registered in the private root so far.
+- Still failing, reasons not established: `display.color-service` (exit 255, no
+  message), `suspend_notification_service` (Rust "No such file or directory",
+  file not named) and `thermal-service.pixel` (SIGABRT after the
+  property-protocol message). Traces are in the result directory.
+- Denials this run: the same two as before; none for any HAL.
+
+## Completed command: stage 8b, the stage 8a command again with a wider library search
 
 **THIS STEP MODIFIES STORAGE**
 
