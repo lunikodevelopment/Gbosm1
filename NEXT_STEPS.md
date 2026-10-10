@@ -69,6 +69,25 @@ cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && ob
 
 Say **get logs** with the output.
 
+## One command: read-only disassembly of Parcel::readParcelable
+
+Result of the `ServiceWithMetadata::readFromParcel` disassembly (reported):
+it reads an int32 size, rejects size < 4 (-EINVAL), then reads a nullable strong
+binder into the first field and a bool into the second, then skips to
+position+size. This matches the reply's layout (size 36, binder object plus
+stability word, lazy bool), as does the union tag. So the two decoders agree with
+the reply on paper; why the client still reported `does not exist` is not
+explained. Not yet inspected: `Parcel::readParcelable`, which `Service` calls
+before `ServiceWithMetadata` (it may read an extra present/null int32), and the
+client's handling after decode (stability check). No storage is modified. On the M1:
+
+```bash
+cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && a=$(nm -D --defined-only libbinder.so | awk '$3 ~ /^_ZNK7android6Parcel14readParcelableEPNS_10ParcelableE/ {print $1; exit}'); echo "readParcelable=$a"; [ -n "$a" ] && objdump -d --no-show-raw-insn --start-address=0x$a --stop-address=$(printf '0x%x' $((0x$a + 0x140))) libbinder.so 2>&1 | head -120
+```
+
+Say **get logs** with the output. If `readParcelable=` is empty, tell me and
+I will use the `.plt` target from the earlier listing instead.
+
 ## One command: Android returned object and outgoing FD Parcel
 
 **THIS STEP MODIFIES STORAGE**
