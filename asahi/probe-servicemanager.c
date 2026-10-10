@@ -22,21 +22,27 @@ static int run_servicemanager(const char *runtime) {
     return 1;
 }
 
-/* Runs one image program unconfined in the private root under strace; stdout to `output`.
+/* Runs one image program unconfined in the private root under strace; stdout to `output`,
+ * `input` (when >= 0) becomes its stdin. `args` is a NULL-terminated list after the program name.
  * Returns the wait status, or -1 when it had to be killed after `seconds`. */
 static int run_in_root(const char *root, const char *runtime, const char *trace, const char *output,
-                       const char *program, const char *arg1, const char *arg2, const char *arg3, int seconds) {
+                       const char *program, const char *const *args, int input, int seconds) {
     char libraries[4096], library_env[4200], linker[4096], image[4096];
     PATH_JOIN(libraries, runtime, "lib64"); PATH_JOIN(linker, runtime, "linker64"); PATH_JOIN(image, runtime, program);
     require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) < (int)sizeof(library_env),
             "library environment too long");
     pid_t pid = fork(); if (pid < 0) fail("fork image program");
     if (pid == 0) {
+        const char *argv_exec[24]; int n = 0;
+        const char *head[] = {"strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", trace, "-E", library_env, linker, image};
+        for (size_t i = 0; i < sizeof(head) / sizeof(head[0]); i++) argv_exec[n++] = head[i];
+        for (int i = 0; args && args[i] && n < 22; i++) argv_exec[n++] = args[i];
+        argv_exec[n] = NULL;
         int out = open(output, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
         if (out < 0 || dup2(out, STDOUT_FILENO) < 0) fail("redirect image program output");
+        if (input >= 0 && dup2(input, STDIN_FILENO) < 0) fail("install image program stdin");
         if (chroot(root) || chdir("/")) fail("enter private root for image program");
-        execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", trace, "-E", library_env,
-              linker, image, arg1, arg2, arg3, (char *)NULL);
+        execv("/usr/bin/strace", (char *const *)argv_exec);
         fail("execute traced image program");
     }
     int status = 0;
@@ -76,13 +82,17 @@ int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[2], "--describe") == 0) return native_echo_main(argc, argv);
     int with_client = argc == 5 && strcmp(argv[4], "--list-client") == 0;
     int with_register = argc == 5 && strcmp(argv[4], "--register-parcel") == 0;
-    int with_serve = argc == 6 && strcmp(argv[4], "--serve-image") == 0;
+    int with_serve = (argc == 6 || argc == 8) && strcmp(argv[4], "--serve-image") == 0;
     const char *served = with_serve ? argv[5] : NULL;
+    /* Optional: --serve-image NAME FIRST LAST tries `service call <name> <code> fd /proc/self/fd/0 i64 16384` for each code. */
+    long first_code = 0, last_code = -1;
+    if (with_serve && argc == 8) { first_code = strtol(argv[6], NULL, 10); last_code = strtol(argv[7], NULL, 10);
+        require(first_code >= 1 && last_code >= first_code && last_code <= 32, "unsupported transaction code range"); }
     require(!with_serve || (strlen(served) < 128 && strspn(served, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") == strlen(served)),
             "unsupported image program name");
     require((argc == 4 || with_client || with_register || with_serve) && sysconf(_SC_PAGESIZE) == 16384,
             "requires mount directory, runtime directory, root directory, optional --list-client and 16 KiB pages");
-    alarm(30);
+    alarm(with_serve && last_code >= first_code ? 110 : 30);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs");
     char control_path[4096], device_path[4096], trace[4096], target[4096];
     PATH_JOIN(control_path, argv[1], "binder-control"); PATH_JOIN(device_path, argv[1], "asahi-service-stub");
@@ -212,7 +222,7 @@ int main(int argc, char **argv) {
             if (waitpid(spid, &sstatus, WNOHANG) == spid) {
                 report_status("IMAGE_SERVER_EXITED_EARLY", sstatus);
             } else {
-                report_status("SERVE_LIST_CLIENT", run_in_root(argv[3], argv[2], list_trace, list_out, "service", "list", NULL, NULL, 10));
+                report_status("SERVE_LIST_CLIENT", run_in_root(argv[3], argv[2], list_trace, list_out, "service", (const char *const[]){"list", NULL}, -1, 10));
                 /* Find the registered name for the served program in the list output: "<n>\t<name>: [<descriptor>]". */
                 char name[256] = "", text[8192] = ""; FILE *f = fopen(list_out, "r");
                 if (f) { size_t got = fread(text, 1, sizeof(text) - 1, f); text[got] = 0; fclose(f); }
@@ -227,7 +237,19 @@ int main(int argc, char **argv) {
                 if (name[0]) {
                     printf("SERVE_NAME_FOUND=%s\n", name);
                     /* 1598968902 = INTERFACE_TRANSACTION: the service returns its interface descriptor. */
-                    report_status("SERVE_CALL_CLIENT", run_in_root(argv[3], argv[2], call_trace, call_out, "service", "call", name, "1598968902", 10));
+                    report_status("SERVE_CALL_CLIENT", run_in_root(argv[3], argv[2], call_trace, call_out, "service", (const char *const[]){"call", name, "1598968902", NULL}, -1, 10));
+                    for (long code = first_code; code <= last_code; code++) {
+                        /* A sealed read-only 16 KiB memfd on the client's stdin, as in the Parcel probe. */
+                        int input = parcel_setup_input();
+                        char code_text[16], label[64], trace_path[4096], out_path[4096], file_name[64];
+                        snprintf(code_text, sizeof(code_text), "%ld", code);
+                        snprintf(file_name, sizeof(file_name), "fd-call-%ld.trace", code); PATH_JOIN(trace_path, argv[2], file_name);
+                        snprintf(file_name, sizeof(file_name), "fd-call-%ld.stdout", code); PATH_JOIN(out_path, argv[2], file_name);
+                        snprintf(label, sizeof(label), "SERVE_FD_CALL_%ld", code);
+                        report_status(label, run_in_root(argv[3], argv[2], trace_path, out_path, "service",
+                            (const char *const[]){"call", name, code_text, "fd", "/proc/self/fd/0", "i64", "16384", NULL}, input, 10));
+                        close(input);
+                    }
                 } else {
                     puts("SERVE_NAME_FOUND=none: the served program did not appear in the service list");
                 }

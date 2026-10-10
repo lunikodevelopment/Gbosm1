@@ -37,7 +37,13 @@ def main():
                         help="with --real-servicemanager: a native endpoint registers through the real addService and the image's service CLI runs the Parcel call against it")
     parser.add_argument('--serve-image', metavar='PART:PATH',
                         help="with --real-servicemanager: run this image program (for example vendor_a:/bin/disk_info_service) as a server and call it with the image's service CLI")
+    parser.add_argument('--fd-codes', metavar='FIRST-LAST',
+                        help="with --serve-image: also try the service CLI with an FD argument for these transaction codes (1-32)")
     args = parser.parse_args()
+    if args.fd_codes and not args.serve_image:
+        parser.error('--fd-codes requires --serve-image')
+    if args.fd_codes and not re.fullmatch(r'\d{1,2}-\d{1,2}', args.fd_codes):
+        parser.error('--fd-codes must look like 1-8')
     if args.serve_image and not args.real_servicemanager:
         parser.error('--serve-image requires --real-servicemanager')
     if args.serve_image and (args.list_client or args.register_parcel):
@@ -406,8 +412,10 @@ def main():
                 command.append('--register-parcel')
             if args.serve_image:
                 command.extend(['--serve-image', result['android_runtime']['served_program']['runtime_name']])
+                if args.fd_codes:
+                    command.extend(args.fd_codes.split('-'))
         result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
-                                  else 'transfer' if args.object_fd else 'echo', 40)
+                                  else 'transfer' if args.object_fd else 'echo', 120 if args.fd_codes else 40)
         marker = ('SM_LAUNCHER=DONE' if sm_mode else 'ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
                   else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS')
         output = result['execution']['stdout']
@@ -489,6 +497,21 @@ def main():
             found = re.search(r'^SERVE_NAME_FOUND=(\S+)', output, re.M)
             result['serve_image']['name'] = found[1] if found else None
             result['serve_image']['call_result'] = bool(re.search(r'Result:\s*Parcel\(', result['serve_image']['call_stdout']))
+            if args.fd_codes:
+                first, last = (int(x) for x in args.fd_codes.split('-'))
+                result['serve_image']['fd_calls'] = {}
+                for code in range(first, last + 1):
+                    text = read_out(f'fd-call-{code}.stdout')
+                    result['serve_image']['fd_calls'][code] = text
+                    log(f'FD CALL {code} OUTPUT:\n' + text)
+                server_trace = runtime_dir / 'server.trace'
+                hits = []
+                if server_trace.is_file():
+                    with server_trace.open(errors='replace') as stream:
+                        hits = [l.rstrip() for l in stream if 'memfd:gbos-android-parcel' in l][:40]
+                result['serve_image']['server_trace_memfd_lines'] = hits
+                (out / 'server-memfd-lines.txt').write_text('\n'.join(hits) + '\n')
+                log('SERVER TRACE LINES MENTIONING THE SENT MEMFD (' + str(len(hits)) + '):\n' + '\n'.join(hits))
             missing = [m for m in ('SERVE_LIST_CLIENT=exit status 0', 'SERVE_CALL_CLIENT=exit status 0', 'IMAGE_SERVER_STOPPED') if m not in output]
             result['missing_markers'] = missing
             log('SERVE_IMAGE_NAME=' + str(result['serve_image']['name']) + ' CALL_RESULT=' + str(result['serve_image']['call_result']))

@@ -13,7 +13,7 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 6a" below, then say
+Next action: run the one command under "Run now: stage 6b" below, then say
 **get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
@@ -405,7 +405,43 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: stage 6a, an image program serves, the image's `service` CLI calls it
+## Run now: stage 6b, does Android receive a file descriptor? (`gsid`)
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as stage 6a: one new
+`work/asahi/real-servicemanager-*` result directory, the temporary
+`gbos_binder_probe` SELinux module and one label on the new launcher (restored
+and removed by the runner; refuses a preexisting module; SELinux stays
+enforcing), and private mounts that end with the namespace. Nothing outside the
+new directory is written; no partitioning, formatting, flashing or boot change.
+
+What happens: the real `servicemanager` starts, then the image's unmodified
+`/system/bin/gsid` (the GSI installer service; the only candidate whose strings show
+it reading an FD from a call) is started in the same private root, unconfined as your
+user. The image's `service list` finds its name and `service call <name> 1598968902`
+asks for its interface descriptor, as in 6a. Then, for each transaction code from 1
+to 8, the image's `service call <name> <code> fd /proc/self/fd/0 i64 16384` sends
+a sealed read-only 16 KiB memfd on the client's stdin plus a number.
+
+Why a range: I do not know which code of the image's `IGsiService` takes a file
+descriptor (my recollection of upstream suggests `commitGsiChunkFromStream` and
+`setGsiAshmem`, but their numbering is unverified). A wrong code should be refused
+with a bad-Parcel status. gsid works only on `/data/gsi`, `/metadata/gsi` and device-mapper
+paths that do not exist in the private root (its `/dev` holds only the private
+binder and null devices), so any install action fails inside the namespace; it has
+no path to your disks. Evidence of receipt is the gsid trace naming the sent
+memfd (`memfd:gbos-android-parcel`) after the call; the runner collects those lines. A
+gsid that cannot start without Android init, or that exits, is an acceptable
+result to report.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --serve-image system_a:/system/bin/gsid --fd-codes 1-8
+```
+
+After it finishes, say **get logs** (paste the terminal output).
+
+## Completed command: stage 6a, an image program serves, the image's `service` CLI calls it (passed)
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -428,16 +464,26 @@ involved yet; this tests an Android-built server registering with the real
 servicemanager and answering one call. The SELinux additions are the same three
 binder permissions as in 5c (no new ones planned).
 
-Expected, as a plan and not a result: the service registers lazily and may need
-its VINTF declaration (the fixture is present); it may also exit if it cannot
-read the block devices it names, which is an acceptable result to report.
+### Result: stage 6a passed
 
-```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --serve-image vendor_a:/bin/disk_info_service
-```
+Reported by the user (`work/asahi/real-servicemanager-jckrdcwm`; launcher exit 0,
+cleanup 0/0). Operationally tested:
+- The image's unmodified `vendor_a:/bin/disk_info_service` (an NDK Binder server)
+  registered `com.google.desktop.disk_info.IDiskInfoService/default` with the
+  image's real servicemanager. `service list` printed `Found 2 services:` that
+  name and `manager`.
+- `service call ... 1598968902` exited 0 and returned the String16
+  `com.google.desktop.disk_info.IDiskInfoService`.
+- The server's own log shows libbinder's lazy-service registrar receiving the
+  servicemanager's client-count callback ("has clients: 1"), so the real
+  servicemanager also made a callback transaction into the Android server.
+- The only new AVC lines are two more `{ open }` denials of
+  `/dev/__properties__` for the servicemanager domain (22:10:03); the earlier lines
+  in the output are stale. The server and clients ran unconfined, so no extra
+  SELinux permission was needed beyond the three from 5c.
 
-The runner prints the server's output, the registered name, the call result and
-trace tails. After it finishes, say **get logs**.
+Limits: no FD was involved; the server never touched its block devices; the
+property service remains a stand-in.
 
 ## Completed scans: which image program could serve a call (stage 6 candidates)
 
