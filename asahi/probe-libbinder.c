@@ -56,6 +56,7 @@ static void stub_ready_property(void) {
     puts("STUB_READY_PROPERTY=CREATED: private servicemanager.ready=true; Bionic consumption remains to be observed.");
 }
 
+#ifndef GBOS_PARCEL_MODE
 static struct binder_transaction_data receive_request(struct connection c) {
     unsigned char buf[4096];
     for (;;) {
@@ -154,13 +155,22 @@ static void list_server(const char *path, int ready) {
     }
     require(0, "too many metadata requests before listServices");
 }
+#else
+static void parcel_server(const char *path, int ready);
+static void parcel_setup_input(void);
+#endif
 int main(int argc, char **argv) {
     if (signal(SIGALRM, timeout_exit) == SIG_ERR) fail("install alarm handler");
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 4 && strcmp(argv[1], "--server") == 0) {
         char *end; long ready = strtol(argv[3], &end, 10);
         require(*end == 0 && ready >= 0 && ready <= 1024, "bad readiness descriptor");
-        list_server(argv[2], (int)ready); return 0;
+#ifdef GBOS_PARCEL_MODE
+        parcel_server(argv[2], (int)ready);
+#else
+        list_server(argv[2], (int)ready);
+#endif
+        return 0;
     }
     if (argc == 3 && strcmp(argv[2], "--describe") == 0) return native_echo_main(argc, argv);
     require(argc == 3 && sysconf(_SC_PAGESIZE) == 16384, "requires mount directory, runtime and 16 KiB pages");
@@ -200,23 +210,43 @@ int main(int argc, char **argv) {
     }
     close(ready[1]); char token;
     require(read(ready[0], &token, 1) == 1 && token == 'R', "stub stopped before readiness"); close(ready[0]);
+#ifdef GBOS_PARCEL_MODE
+    parcel_setup_input();
+#endif
     stub_ready_property();
     pid_t client_pid = fork(); if (client_pid < 0) fail("fork Android client");
     if (client_pid == 0) {
         char library_env[sizeof(libraries) + 32];
         require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) <
                 (int)sizeof(library_env), "library environment too long");
+#ifdef GBOS_PARCEL_MODE
+        char output_path[4096]; PATH_JOIN(output_path, argv[2], "parcel-client.stdout");
+        int output = open(output_path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+        if (output < 0 || dup2(output, STDOUT_FILENO) < 0) fail("redirect Android Parcel output");
+        close(output);
+        execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160",
+              "-o", trace, "-E", library_env, linker, client, "call", "gbos.parcel", "5658",
+              "i32", "5658", "fd", "/dev/gbos-parcel-input", (char *)NULL);
+#else
         puts("Starting Android service list under client-only syscall tracing.");
         execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160",
               "-o", trace, "-E", library_env, linker, client, "list", (char *)NULL);
+#endif
         fail("execute traced Android service client");
     }
     int client_status, server_status;
     require(waitpid(client_pid, &client_status, 0) == client_pid && WIFEXITED(client_status) &&
-            WEXITSTATUS(client_status) == 0, "Android service list failed");
+            WEXITSTATUS(client_status) == 0, "Android service client failed");
     require(waitpid(server_pid, &server_status, 0) == server_pid && WIFEXITED(server_status) &&
             WEXITSTATUS(server_status) == 0, "native service stub failed");
+#ifdef GBOS_PARCEL_MODE
+    if (umount("/dev/gbos-parcel-input")) fail("unmount private Parcel input");
+#endif
     if (umount("/dev/null") || umount("/dev/binder") || umount("/dev") || umount(argv[1])) fail("unmount private probe mounts");
+#ifdef GBOS_PARCEL_MODE
+    puts("ANDROID_PARCEL=PASS: Android client and native Parcel endpoint exited successfully; runner must verify receipt output.");
+#else
     puts("LIBBINDER_LIST=PASS: Android service client and native empty-list stub completed.");
+#endif
     return 0;
 }
