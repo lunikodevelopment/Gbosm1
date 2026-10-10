@@ -5,6 +5,8 @@
  *   dumb-apple : DRM_IOCTL_MODE_CREATE_DUMB on the display driver's card node
  *   dumb-asahi : the same ioctl on the GPU driver's card node
  *   dma-heap   : DMA_HEAP_IOCTL_ALLOC from each readable heap under /dev/dma_heap
+ *   minigbm-apple : with a library path argument, a patched minigbm's gbm_bo_create on the
+ *                   display card node (its dumb backend), then the same checks
  * Opens no node for modesetting and never takes DRM master. */
 #include <vulkan/vulkan.h>
 #include <xf86drm.h>
@@ -20,6 +22,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <dlfcn.h>
 
 /* Older headers lack the enum; 26 is what Honeykrisp reported in the completed probe. */
 #ifndef VK_DRIVER_ID_MESA_HONEYKRISP
@@ -362,7 +365,45 @@ static int heap_cases(unsigned *tried) {
     return worst;
 }
 
-int main(void) {
+/* Stage 3d: allocate through a (patched) minigbm built from the AOSP tree, loaded by path.
+ * Local prototypes keep Mesa's system gbm.h out of the picture. Usage flags are minigbm's
+ * gbm.h values: SCANOUT 1<<0, RENDERING 1<<2, LINEAR 1<<4. */
+static int minigbm_case(const char *path) {
+    void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!lib) { printf("STAGE3B case=minigbm-apple dlopen=FAIL %s\n", dlerror()); return -1; }
+    void *(*create_device)(int) = (void *(*)(int))dlsym(lib, "gbm_create_device");
+    void *(*bo_create)(void *, uint32_t, uint32_t, uint32_t, uint32_t) =
+        (void *(*)(void *, uint32_t, uint32_t, uint32_t, uint32_t))dlsym(lib, "gbm_bo_create");
+    int (*bo_fd)(void *) = (int (*)(void *))dlsym(lib, "gbm_bo_get_fd");
+    uint32_t (*bo_stride)(void *) = (uint32_t (*)(void *))dlsym(lib, "gbm_bo_get_stride");
+    void (*bo_destroy)(void *) = (void (*)(void *))dlsym(lib, "gbm_bo_destroy");
+    void (*dev_destroy)(void *) = (void (*)(void *))dlsym(lib, "gbm_device_destroy");
+    if (!create_device || !bo_create || !bo_fd || !bo_stride || !bo_destroy || !dev_destroy) {
+        printf("STAGE3B case=minigbm-apple missing gbm entry points in %s\n", path); return -1; }
+    int card = open_card("apple");
+    if (card < 0) return -1;
+    void *gbm = create_device(card);
+    if (!gbm) { printf("STAGE3B case=minigbm-apple gbm_create_device=FAIL (no backend matched?)\n"); close(card); return -1; }
+    printf("STAGE3B case=minigbm-apple gbm_create_device=PASS\n");
+    void *bo = bo_create(gbm, W, H, DRM_FORMAT_ARGB8888, (1u << 0) | (1u << 2) | (1u << 4));
+    int result = -1;
+    if (!bo) printf("STAGE3B case=minigbm-apple gbm_bo_create=FAIL errno=%d\n", errno);
+    else {
+        int fd = bo_fd(bo);
+        uint32_t stride = bo_stride(bo);
+        off_t size = fd >= 0 ? lseek(fd, 0, SEEK_END) : -1;
+        if (fd >= 0) lseek(fd, 0, SEEK_SET);
+        printf("STAGE3B case=minigbm-apple gbm_bo_create=PASS fd=%d stride=%u dmabuf_size=%lld\n", fd, stride, (long long)size);
+        if (fd >= 0 && size > 0) result = roundtrip("minigbm-apple", fd, stride, (uint64_t)size);
+        else if (fd >= 0) close(fd);
+        bo_destroy(bo);
+    }
+    dev_destroy(gbm);
+    close(card);
+    return result;
+}
+
+int main(int argc, char **argv) {
     setbuf(stdout, NULL);
     printf("STAGE3B page_size=%ld\n", sysconf(_SC_PAGESIZE));
     if (init_vulkan()) return 4;
@@ -370,10 +411,12 @@ int main(void) {
     int asahi = dumb_case("dumb-asahi", "asahi");
     unsigned heaps = 0;
     int heap = heap_cases(&heaps);
-    printf("STAGE3B summary dumb-apple=%s dumb-asahi=%s dma-heap=%s (heaps tried: %u)\n",
+    int mg = argc > 1 ? minigbm_case(argv[1]) : -2;
+    printf("STAGE3B summary dumb-apple=%s dumb-asahi=%s dma-heap=%s (heaps tried: %u) minigbm-apple=%s\n",
            apple == 0 ? "PASS" : apple > 0 ? "FAIL" : "UNAVAILABLE",
            asahi == 0 ? "PASS" : asahi > 0 ? "FAIL" : "UNAVAILABLE",
-           heaps && heap == 0 ? "PASS" : heap > 0 ? "FAIL" : "UNAVAILABLE", heaps);
+           heaps && heap == 0 ? "PASS" : heap > 0 ? "FAIL" : "UNAVAILABLE", heaps,
+           mg == -2 ? "NOT_RUN" : mg == 0 ? "PASS" : mg > 0 ? "FAIL" : "ERROR");
     vkDestroyDevice(dev, NULL);
     vkDestroyInstance(inst, NULL);
     return 0; /* every outcome is a result; the summary line carries it */

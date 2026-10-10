@@ -1990,7 +1990,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2, 3a and 3b complete; stage 3c is next
+## Graphics: stages 0, 1, 2, 3a, 3b and 3c complete; stage 3d is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2028,33 +2028,52 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3c, can the display take GPU-node buffers?
+### Next: Graphics stage 3d, minigbm with an `apple` dumb backend
 
-Stage 3b (below) showed linear dumb buffers work with Honeykrisp from either
-card node. For Android's allocator the open question is scanout: the
-compositor's buffers must be accepted by the display driver. This step
-allocates dumb buffers on the `asahi` node (256x256 and the panel's 2560x1600),
-exports them as dma-bufs, imports them into the `apple` display driver and
-tries `ADDFB2` (wrapping in a framebuffer; nothing is shown), then repeats
-with a buffer allocated on `apple` itself as the baseline. It also tests
-whether the GPU's render node can create dumb buffers at all, which decides
-whether an unmodified minigbm (it tries `renderD*` first) could use an
-`asahi` dumb backend.
+Stage 3c (below) means an `apple` dumb backend is enough for linear buffers.
+minigbm tries `renderD*` first, where no backend matches (the `asahi` render
+node refuses dumb buffers), then the `card*` nodes, and `apple` is the only
+one with a backend, so three small edits should make it allocate. This step
+copies the stage 3a AOSP clone, applies those edits, builds minigbm natively
+with its own Makefile, then loads the resulting library from the Honeykrisp
+probe and allocates a 256x256 ARGB8888 buffer through `gbm_bo_create`,
+repeating the CPU-to-GPU and GPU-to-CPU checks from stage 3b. Android/Bionic,
+the allocator service and the mapper are not involved yet. The Makefile has
+not been read here, so a build failure is a likely first result; the report
+prints the Makefile head and the end of the build log for that case.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/dumb-crossimport-*` directory with the probe binary
-and `report.txt`. Allocates dumb buffers (up to 16 MB each) for the run only
-and removes the test framebuffers it creates. No modeset, no commit, no DRM
-master, no Vulkan; GNOME is unaffected. Delete the directory to reverse.
+Creates one new `work/asahi/minigbm-apple-*` directory: a patched copy of the
+clone, its build output, the probe, `minigbm-apple.patch` and `report.txt`.
+The stage 3a clone is only read. One 256x256 dumb buffer is allocated on the
+display card node for the run only; no modeset, no DRM master. Delete the
+directory to reverse. Needs `gcc`, `make` and the stage 1 development packages.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/run-dumb-crossimport.sh
+bash asahi/run-minigbm-apple.sh
 ```
 
-Send the printed `report.txt`. Any failure is a result. The probe compiled
-here but has not run.
+Send the printed `report.txt`. The modified files stay under minigbm's BSD
+license (`LICENSE` is kept in the copy); the source is AOSP
+`external/minigbm` `455b745` as recorded in stage 3a.
+
+### Result: Graphics stage 3c, display import of GPU-node buffers (passed)
+
+Operationally tested, reported by the user from
+`work/asahi/dumb-crossimport-ryzXnpMT`:
+
+- `renderD128` (GPU) refuses dumb buffers: `dumb_create` errno 13. So a
+  minigbm `asahi` dumb backend cannot work through the render node it tries
+  first.
+- Dumb buffers created on the GPU card node (`card1`) were exported, imported
+  into the `apple` display driver and wrapped by `ADDFB2` (XRGB8888) at 256x256
+  and at the panel size 2560x1600 (pitch 10240, 16384000 bytes). All passed,
+  as did the baseline buffers allocated on `apple` itself.
+- The test framebuffers were removed. Nothing was committed to a CRTC or plane
+  (that needs DRM master), so actual scanout of these buffers is still
+  untested; `ADDFB2` acceptance is evidence of import, not of display.
 
 ### Result: Graphics stage 3b, linear buffers without GBM (passed for dumb buffers)
 
