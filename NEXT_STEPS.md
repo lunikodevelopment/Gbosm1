@@ -2577,6 +2577,17 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-gralloc-service.sh
 ```
 
+First run (reported): 44 of 46 units compiled. The two failures were
+`gralloc4/CrosGralloc4Allocator.cc` and `CrosGralloc4AllocatorService.cc`, the
+legacy HIDL allocator, which needs `allocator@4.0` headers we do not need: the
+AIDL allocator and stable-C mapper only use `gralloc4/CrosGralloc4Utils`. The
+script now compiles only that file from `gralloc4/`. Same rerun lines:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-gralloc-service.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation

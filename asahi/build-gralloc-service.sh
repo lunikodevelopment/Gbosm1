@@ -44,7 +44,8 @@ mkdir -p "$OUT/obj"
 # and the aidlcommonsupport NativeHandle helper from hardware/interfaces.
 {
     for f in aidl/Allocator.cpp aidl/Main.cpp mapper_stablec/Mapper.cpp; do echo "$MG/cros_gralloc/$f svc_$(echo "$f" | tr '/.' '__')"; done
-    for f in "$MG"/cros_gralloc/*.cc "$MG"/cros_gralloc/gralloc4/*.cc; do [[ -e $f ]] && echo "$f core_$(basename "${f%.cc}")"; done
+    # gralloc4/ also holds the legacy HIDL allocator and mapper; only its Utils are used by the AIDL allocator and stable-C mapper.
+    for f in "$MG"/cros_gralloc/*.cc "$MG"/cros_gralloc/gralloc4/CrosGralloc4Utils.cc; do [[ -e $f ]] && echo "$f core_$(basename "${f%.cc}")"; done
     for f in $(find "$GEN/generated" -name '*.cpp' | sort); do echo "$f gen_$(basename "${f%.cpp}")"; done
     NH=$(find "$SRC/hardware_interfaces/common/support" -name 'NativeHandle.cpp' 2>/dev/null | head -1)
     [[ -n $NH ]] && echo "$NH support_NativeHandle"
