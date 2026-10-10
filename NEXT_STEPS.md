@@ -23,7 +23,7 @@ Upstream AOSP source is not reachable from the cloud session, so the lookup call
 and reply layout cannot be confirmed there. Run on the M1:
 
 ```bash
-cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime && strings -a libbinder.so | grep -E 'checkService|getService|ServiceWithMetadata|IServiceManager|isDeclared|listServices' | sort -u | head -60
+cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime && f=$(find . -name libbinder.so | head -1) && echo "$f" && strings -a "$f" | grep -E 'checkService|getService|ServiceWithMetadata|IServiceManager|isDeclared|listServices' | sort -u | head -60
 ```
 
 Say **get logs** with the output pasted. It shows which service-manager method
