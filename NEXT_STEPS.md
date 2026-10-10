@@ -158,6 +158,11 @@ session). Build exit 0; Binder protocol 8, page size 16384; memfd context
   query `<no matches>`. No manual cleanup is needed. Keep this directory as
   provenance.
 
+Repeat run `work/asahi/android-parcel-probe-rxdul6oa` (reported by the user)
+reproduced the same result: identical native markers and request hex, client
+`Service gbos.parcel does not exist`, exit 10, cleanup codes 0, no AVC matches.
+The failure is deterministic, not a one-off.
+
 ## Completed native Binder object/FD milestone
 
 User-supplied report and summary:
