@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B4b", below) and paste its output.
+bring-up stage B4c", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -736,24 +736,35 @@ Operationally tested on the M1:
   The process list printed the host's processes (my listing read the wrong
   `/proc`); fixed to read the sandbox's.
 
-## Next action: bring-up stage B4b, zygote preload with /data directories created
+## Results: bring-up stage B4b (`root-smoke-nher6buv`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4: the
+- The `/data/dalvik-cache` abort is gone. `app_process64` now stops earlier, at
+  `app_process: Unable to determine ABI list from property ro.product.cpu.abilist64`.
+- Cause: the build.prop files carry only the per-partition names
+  (`ro.product.<partition>.cpu.abilist64`); Android's init copies them to the plain
+  `ro.product.*` names following `ro.product.property_source_order`. My property
+  stand-in did not do that.
+- Everything else is unchanged: zygote socket passed, `logd`, `linkerconfig` and
+  `derive_classpath` fine; the abort report cannot reach a crash handler (expected).
+
+## Next action: bring-up stage B4c, zygote preload with derived ro.product.* properties
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4b: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
-(logs, trace up to tens of MB); the `/data` directories are created on the private
-tmpfs and vanish at exit. Loss: none. Reversal: delete the printed directory. No
-sudo, no SELinux module, no binder, no partition, boot or flash change.
+(logs, trace); private tmpfs takes the rest and vanishes at exit. Loss: none.
+Reversal: delete the printed directory. No sudo, no SELinux module, no binder, no
+partition, boot or flash change.
 
-What changes: `/data/dalvik-cache/arm64` (mode 0771), `/data/misc`, `/data/system`,
-`/data/user/0`, `/data/user_de/0`, `/data/app`, `/data/anr` and `/data/tombstones`
-are created before zygote starts, as init.rc does. Everything else is as in B4.
+What changes: `asahi/make-property-area.py` now fills each plain `ro.product.<x>`
+from the first partition in `odm,vendor,product,system_ext,system` (or the image's
+own `ro.product.property_source_order`) that defines `ro.product.<partition>.<x>`.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py
 ```
 
-Its first line still reads `=== BRING-UP THREAD, STAGE B4`. Paste only the command
-output (not the prompt line) into this thread, "Remaining steps to boot Android".
+Its first line reads `=== BRING-UP THREAD, STAGE B4`. Paste only the command output
+(not the prompt line) into this thread, "Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 

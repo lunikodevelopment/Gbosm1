@@ -58,7 +58,24 @@ def load_properties(root):
             props[name.strip()] = value.strip()
             count += 1
         used.append((relative, count))
+    derive_product_properties(props)
     return props, used
+
+
+def derive_product_properties(props):
+    """Android's init sets ro.product.<x> from ro.product.<partition>.<x> in property_source_order.
+
+    Programs such as app_process read the plain names (ro.product.cpu.abilist64); the build.prop
+    files only carry the per-partition names. The first partition in the order that has a value wins.
+    """
+    order = props.get("ro.product.property_source_order", "odm,vendor,product,system_ext,system").split(",")
+    names = {}
+    for full in list(props):
+        parts = full.split(".")
+        if len(parts) > 3 and parts[:2] == ["ro", "product"] and parts[2] in order:
+            names.setdefault(".".join(parts[3:]), []).append((order.index(parts[2]), props[full]))
+    for rest, values in names.items():
+        props.setdefault("ro.product." + rest, min(values)[1])
 
 
 def build(props):
