@@ -40,7 +40,8 @@ INC="-I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm"
 echo '== Build libminigbm for Android (make)'
 # Flags go inside CC: variables given on the make command line would replace the Makefile's own += flags.
 # PKG_CONFIG=true makes every pkg-config probe in the Makefile print nothing, so no host paths leak in.
-if (cd "$OUT/minigbm" && make -j4 OUT="$OUT/minigbm-build" CC="$TOOL" PKG_CONFIG=true \
+# -Qunused-arguments: common.mk compiles with -Werror, and clang flags the linker-only -Wl option on compile steps.
+if (cd "$OUT/minigbm" && make -j4 OUT="$OUT/minigbm-build" CC="$TOOL -Qunused-arguments" PKG_CONFIG=true \
         PC_CFLAGS="$INC" PC_LIBS="-L$(dirname "$LIBDRM_SO") -ldrm") >"$OUT/make.log" 2>&1; then
     echo 'make exit status: 0'; else echo "make exit status: $?"; fi
 tail -30 "$OUT/make.log"

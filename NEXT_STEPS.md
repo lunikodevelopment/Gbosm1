@@ -2119,16 +2119,25 @@ copied from the stage 2d result), the probe and `report.txt`. Earlier results
 are only read. One 256x256 dumb buffer is allocated on the display card node
 for the run only; no modeset, no DRM master. Delete the directory to reverse.
 
-First remove the stray file the first stage 3d run left in the checkout, and
-check nothing else was left:
+First run (reported by the user, `work/asahi/minigbm-bionic-PDT2TvYD`): the
+patched source copied and libdrm was found, but every compile step failed with
+`-Wl,-z,max-page-size=16384: 'linker' input unused [-Werror,...]`. `common.mk`
+compiles with `-Werror`, and my `CC` carried a linker-only option. The script
+now adds `-Qunused-arguments`. Nothing was built.
+
+The first stage 3d run also left minigbm's build output in the checkout root
+(`*.o`, `*.o.depends`, `*.pic.d`, `*.pic.o`, `*.pie.d`, `*.pie.o`, `gbm.pc`,
+`.dont_delete_on_clean`, all untracked). `artifacts/` also shows as untracked;
+it is not part of that output as far as I can tell, so leave it alone. Preview
+what would be removed (nothing is deleted by this command), then remove it:
 
 ```bash
-cd ~/Gbosm1 && rm -v ./libminigbm.so.1.0.0 && git status --short
+cd ~/Gbosm1 && git clean -n -- ':(glob)*.o' ':(glob)*.o.depends' ':(glob)*.pic.d' ':(glob)*.pic.o' ':(glob)*.pie.d' ':(glob)*.pie.o' gbm.pc .dont_delete_on_clean
 ```
 
-If `git status --short` lists anything, send it; those are leftover build files
-(`.o`, `.d`, `.pc`) from that run and are safe to delete once you have shown me.
-Then:
+If the preview lists only those files, run the same command with `-f` in place
+of `-n`, then confirm with `git status --short` (only `artifacts/` should
+remain, if it was there before). Then:
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
