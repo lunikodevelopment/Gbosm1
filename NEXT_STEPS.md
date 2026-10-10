@@ -1504,7 +1504,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0 and 2 complete; stage 1 is next
+## Graphics: stages 0, 1 and 2 complete; stage 1b is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -1542,38 +1542,54 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 1, GBM to Vulkan dma-buf round trip
+### Next: Graphics stage 1b, Apple tiled and compressed layouts
+
+Stage 1 (result below) passed, but GBM chose linear even when not asked to, so
+Apple's own GPU layouts were not tested. The probe now also asks GBM for
+Apple's tiled (`0x0c00000000000001`) and compressed (`0x0c00000000000002`)
+modifiers explicitly, the two non-linear modifiers Honeykrisp listed. Same
+scope as stage 1: render node only, no display, GNOME unaffected.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gbm-dmabuf-*` directory holding the built probe and
-its logs; delete it to reverse. If the development packages are missing, the
-first command installs `mesa-libgbm-devel` and `libdrm-devel` with dnf
-(`sudo dnf remove` reverses that). The probe uses only the Asahi render node,
-found by driver name; it does not open the display for writing, set a mode or
-need DRM master, so GNOME is unaffected.
+Creates one new `work/asahi/gbm-dmabuf-*` directory with the probe and its
+logs; delete it to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-rpm -q mesa-libgbm-devel libdrm-devel >/dev/null || sudo dnf install mesa-libgbm-devel libdrm-devel
 bash asahi/run-gbm-dmabuf.sh
 ```
 
-Send the printed `probe.log` and `status.txt`.
+Send the output. The summary line gives a result per layout. A tiled or
+compressed failure is a result, not a blocker: scanout is linear-only anyway
+(stage 0), so it only decides whether GPU-only Android buffers can use
+Apple's layouts.
 
-What it does, twice (a linear buffer, then the driver's own layout): allocates
-a 256x256 ARGB8888 buffer with GBM on the Asahi render node, exports it as a
-dma-buf, imports it into Honeykrisp with its DRM format modifier, clears it to
-a known colour on the GPU, then checks every pixel through a Vulkan copy and
-through a GBM CPU map. It also lists `/dev/dri` nodes with their driver names.
+### Result: Graphics stage 1, GBM to Vulkan dma-buf round trip (passed)
 
-What the result decides: `linear=PASS` shows the scanout-compatible layout
-round-trips between the allocator and Vulkan; `driver-layout=PASS` shows Asahi's
-own modifier does too. Both passing supports allocating through Mesa's GBM
-(plan decision 1). A failure names the step (`gbm_alloc`, `vulkan_import`,
-`vulkan_readback` or `gbm_readback`) and is a result to report, not to work
-around. This does not test Android, Bionic, scanout or fences between
-processes.
+Operationally tested, reported by the user from
+`work/asahi/gbm-dmabuf-QXvMvf3T` (`bash asahi/run-gbm-dmabuf.sh`, the dnf
+packages were already present):
+
+- Nodes on this boot: `card1` and `renderD128` are `asahi`, `card3` is
+  `apple`, and `card2` could not be opened by the ordinary user (errno 13,
+  driver unknown). Mesa also printed `Opening /dev/dri/card2 failed:
+  Permission denied`, which did not affect the run.
+- GBM backend `drm` on `renderD128`; Vulkan device `Apple M1 (G13G B1)`,
+  Honeykrisp Mesa 26.2.4.
+- Honeykrisp lists three modifiers for B8G8R8A8, all importable from dma-buf
+  with features `0xdd83`: `0x0c00000000000002`, `0x0c00000000000001` and
+  linear `0x0`.
+- Linear case: GBM allocated modifier `0x0`, stride 1024. The dma-buf import
+  into Vulkan, the GPU clear, the Vulkan readback and the GBM CPU map readback
+  all passed (65536/65536 pixels `0xff204080`).
+- Default-layout case: GBM also chose linear (`0x0`) without being asked, and
+  passed identically. Apple's tiled and compressed layouts were therefore not
+  exercised (stage 1b).
+
+This supports plan decision 1 (allocate through Mesa's GBM) for linear,
+scanout-compatible buffers. It does not test Android, Bionic, scanout or
+fences between processes.
 
 ### Result: Graphics stage 2d, Android Honeykrisp under Bionic (passed)
 

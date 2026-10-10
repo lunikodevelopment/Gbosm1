@@ -1,7 +1,8 @@
 /* Graphics stage 1: GBM allocation on the Asahi render node, dma-buf import into
  * Honeykrisp with the buffer's DRM format modifier, a Vulkan clear, then readback
- * through Vulkan and through a GBM CPU map. Runs once with a linear buffer and once
- * with the driver's own layout. Uses no KMS and never opens a display node for writing. */
+ * through Vulkan and through a GBM CPU map. Runs with a linear buffer, GBM's default
+ * layout, and Apple's tiled and compressed modifiers requested explicitly.
+ * Uses no KMS and never opens a display node for writing. */
 #include <vulkan/vulkan.h>
 #include <gbm.h>
 #include <xf86drm.h>
@@ -179,9 +180,11 @@ static unsigned count_good(const unsigned char *base, uint32_t stride, uint32_t 
 }
 
 /* Returns 0 on PASS, 1 on a readback mismatch, -1 on an API failure. */
-static int run_case(struct gbm_device *gbm, const char *name, uint32_t flags) {
+/* With a modifier, asks GBM for exactly that layout; without one, GBM picks. */
+static int run_case(struct gbm_device *gbm, const char *name, uint32_t flags, const uint64_t *request) {
     printf("STAGE1 case=%s\n", name);
-    struct gbm_bo *bo = gbm_bo_create(gbm, W, H, GBM_FORMAT_ARGB8888, flags);
+    struct gbm_bo *bo = request ? gbm_bo_create_with_modifiers2(gbm, W, H, GBM_FORMAT_ARGB8888, request, 1, flags)
+                                : gbm_bo_create(gbm, W, H, GBM_FORMAT_ARGB8888, flags);
     if (!bo) { printf("STAGE1 case=%s gbm_alloc=FAIL errno=%d\n", name, errno); return -1; }
     uint64_t modifier = gbm_bo_get_modifier(bo);
     int planes = gbm_bo_get_plane_count(bo);
@@ -337,12 +340,17 @@ int main(void) {
     if (!gbm) { puts("STAGE1 error gbm_create_device failed"); return 3; }
     printf("STAGE1 gbm_backend=%s\n", gbm_device_get_backend_name(gbm));
     if (init_vulkan()) return 4;
-    int linear = run_case(gbm, "linear", GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
-    int native = run_case(gbm, "driver-layout", GBM_BO_USE_RENDERING);
+    /* Apple vendor modifiers from drm_fourcc.h: GPU_TILED and GPU_COMPRESSED. */
+    const uint64_t tiled = 0x0c00000000000001ull, compressed = 0x0c00000000000002ull;
+    int linear = run_case(gbm, "linear", GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR, NULL);
+    int native = run_case(gbm, "driver-layout", GBM_BO_USE_RENDERING, NULL);
+    int tile = run_case(gbm, "apple-tiled", GBM_BO_USE_RENDERING, &tiled);
+    int comp = run_case(gbm, "apple-compressed", GBM_BO_USE_RENDERING, &compressed);
     vkDestroyDevice(dev, NULL);
     vkDestroyInstance(inst, NULL);
     gbm_device_destroy(gbm);
     close(fd);
-    printf("STAGE1 summary linear=%s driver-layout=%s\n", linear ? "FAIL" : "PASS", native ? "FAIL" : "PASS");
-    return linear || native ? 1 : 0;
+    printf("STAGE1 summary linear=%s driver-layout=%s apple-tiled=%s apple-compressed=%s\n",
+           linear ? "FAIL" : "PASS", native ? "FAIL" : "PASS", tile ? "FAIL" : "PASS", comp ? "FAIL" : "PASS");
+    return linear || native || tile || comp ? 1 : 0;
 }

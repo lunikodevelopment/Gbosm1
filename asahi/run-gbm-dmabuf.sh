@@ -11,7 +11,7 @@ for pc in vulkan:vulkan-loader-devel gbm:mesa-libgbm-devel libdrm:libdrm-devel; 
 done
 echo 'THIS STEP MODIFIES STORAGE'
 echo "Creates one new $ROOT/work/asahi/gbm-dmabuf-* directory with the probe binary and logs."
-echo 'Allocates two 256x256 buffers in GPU memory for the run only. Delete the new directory to reverse.'
+echo 'Allocates up to four 256x256 buffers in GPU memory for the run only. Delete the new directory to reverse.'
 mkdir -p "$ROOT/work/asahi"
 RESULTS=$(mktemp -d "$ROOT/work/asahi/gbm-dmabuf-XXXXXXXX")
 echo "Results: $RESULTS"
