@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build and run a native Binder echo probe in temporary user/mount namespaces."""
 import argparse
+from collections import deque
 import datetime
 import fcntl
 import json
@@ -10,9 +11,11 @@ from pathlib import Path
 import platform
 import shutil
 import signal
+import select
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def main():
@@ -30,7 +33,7 @@ def main():
         sys.exit('Requires the Fedora Asahi ARM64/16 KiB target.')
     required = ['cc', 'unshare', 'runcon', 'sudo', 'semodule', 'chcon', 'ldd']
     if args.android_service:
-        required.append('dump.erofs')
+        required.extend(['dump.erofs', 'strace'])
     for tool in required:
         if not shutil.which(tool):
             sys.exit(f'Missing {tool}; send this error. No packages were installed.')
@@ -70,6 +73,57 @@ def main():
     def log(text):
         print(text, flush=True)
         print(text, file=report, flush=True)
+    def cleanup_previous_clients():
+        expected = set()
+        for summary in parent.glob('libbinder-probe-*/summary.json'):
+            old = json.loads(summary.read_text())
+            if old.get('exit_status') == 0:
+                continue
+            runtime_text = old.get('android_runtime', {}).get('runtime')
+            if not runtime_text:
+                continue
+            runtime = Path(runtime_text).resolve()
+            if runtime.parent != summary.parent.resolve() or runtime.name != 'android-runtime':
+                continue
+            linker, client = str(runtime / 'linker64'), str(runtime / 'service')
+            expected.add((linker, (linker, client, 'list')))
+            expected.add((linker, (client, 'list')))
+        killed = []
+        if expected and (not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal')):
+            raise RuntimeError('pidfd support required for safe cleanup of previous failed clients')
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            fd = None
+            matched = False
+            try:
+                fd = os.pidfd_open(int(entry.name))
+                uid = re.search(r'^Uid:\s+(\d+)', (entry / 'status').read_text(), re.M)
+                if not uid or int(uid[1]) != os.getuid():
+                    continue
+                argv = tuple(x.decode(errors='surrogateescape') for x in (entry / 'cmdline').read_bytes().split(b'\0') if x)
+                executable = os.readlink(entry / 'exe')
+                if (executable, argv) not in expected:
+                    continue
+                matched = True
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                poller = select.poll()
+                poller.register(fd, select.POLLIN)
+                if not poller.poll(3000):
+                    raise RuntimeError('previous probe client did not exit after targeted cleanup')
+                killed.append({'pid': int(entry.name), 'executable': executable, 'argv': argv})
+                log(f'Cleaned previous failed probe client pid={entry.name}: {executable}')
+            except PermissionError:
+                if matched:
+                    raise RuntimeError('permission denied cleaning a verified previous probe client')
+                continue
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        result['cleanup']['previous_clients'] = killed
+
     def run(command, name, seconds):
         isolated = command[0] != 'sudo'
         with (out / (name + '.stdout')).open('wb') as stdout, (out / (name + '.stderr')).open('wb') as stderr:
@@ -77,17 +131,35 @@ def main():
                                        start_new_session=isolated,
                                        env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'})
             try:
-                code = process.wait(timeout=seconds)
+                if isolated:
+                    # Observe exit without reaping: the leader PID cannot be reused
+                    # before its remaining process group has been terminated.
+                    deadline = time.monotonic() + seconds
+                    while True:
+                        event = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                        if event is not None:
+                            code = event.si_status if event.si_code == os.CLD_EXITED else -event.si_status
+                            break
+                        if time.monotonic() >= deadline:
+                            raise subprocess.TimeoutExpired(command, seconds)
+                        time.sleep(0.05)
+                else:
+                    code = process.wait(timeout=seconds)
             except BaseException:
-                try:
-                    if isolated:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
+                if not isolated:
+                    try:
                         process.terminate()
-                except ProcessLookupError:
-                    pass
-                process.wait()
+                    except ProcessLookupError:
+                        pass
                 raise
+            finally:
+                # Always drain isolated descendants, including after a launcher alarm.
+                if isolated:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.wait()
         data = {'command': command, 'returncode': code,
                 'stdout': (out / (name + '.stdout')).read_text(errors='replace'),
                 'stderr': (out / (name + '.stderr')).read_text(errors='replace')}
@@ -96,6 +168,7 @@ def main():
     try:
         log(f'Results: {out}')
         if args.android_service:
+            cleanup_previous_clients()
             import importlib.util
             spec = importlib.util.spec_from_file_location('service_extract', Path(__file__).with_name('prepare-service.py'))
             extraction = importlib.util.module_from_spec(spec)
@@ -107,7 +180,7 @@ def main():
         result['build'] = run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', str(source), '-o', str(binary)], 'build', 60)
         if result['build']['returncode']:
             raise RuntimeError('build stopped; retain diagnostics, no execution attempted')
-        namespace = ['unshare', '--user', '--map-root-user', '--mount', '--propagation', 'private',
+        namespace = ['unshare', '--user', '--map-root-user', '--mount', '--pid', '--mount-proc', '--propagation', 'private',
                      '--fork', '--kill-child']
         description = run(namespace + [str(binary), str(mountpoint), '--describe'], 'device-context', 30)
         if description['returncode']:
@@ -180,7 +253,7 @@ def main():
             raise RuntimeError('labeling new executable failed')
         result['start_time'] = datetime.datetime.now().isoformat()
         # util-linux isolates mount propagation; root privileges apply only inside the new user namespace.
-        command = ['unshare', '--user', '--map-root-user', '--mount', '--propagation', 'private',
+        command = ['unshare', '--user', '--map-root-user', '--mount', '--pid', '--mount-proc', '--propagation', 'private',
                    '--fork', '--kill-child', str(binary), str(mountpoint)]
         if args.android_service:
             command.append(result['android_runtime']['runtime'])
@@ -196,6 +269,21 @@ def main():
         result['error'] = f'{type(error).__name__}: {error}'
         log('STOPPED: ' + result['error'])
     finally:
+        if args.android_service:
+            try:
+                trace = out / 'android-runtime' / 'client.trace'
+                if trace.is_file():
+                    result['client_trace'] = str(trace)
+                    with trace.open(errors='replace') as stream:
+                        tail = ''.join(deque(stream, maxlen=100))
+                    (out / 'client-trace-tail.txt').write_text(tail)
+                    log('CLIENT TRACE TAIL:\n' + tail)
+                else:
+                    log('Client trace unavailable: execution may have stopped before the Android client started.')
+            except BaseException as error:
+                result['trace_error'] = str(error)
+                result['exit_status'] = 1
+                log('Trace collection failed; continuing policy cleanup: ' + str(error))
         # Attempt cleanup even when policy installation was interrupted or only partly completed.
         if install_attempted:
             try:
