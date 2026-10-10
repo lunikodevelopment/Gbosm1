@@ -11,10 +11,60 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none is queued. The user chose to stop at the completed Android
-Parcel milestone; the real-servicemanager attempt (VINTF, SELinux and property
-fixtures, see the servicemanager inspection below) is not planned. Retain all
-earlier results; no completed probe needs rerunning.
+Next action: run the read-only host SELinux facts check below. It decides
+whether the real-servicemanager plan can continue. The plan follows it. Retain
+all earlier results; no completed probe needs rerunning.
+
+## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
+
+The user asked to plan this despite Fedora lacking Android SELinux labels. This
+is a plan, not a result. Each stage needs the previous stage's evidence, and
+any stage may end in "not feasible without changing the image or Fedora policy
+classes", which would be reported rather than worked around. No partitioning,
+flashing, boot-chain or boot-policy change is part of it; SELinux stays enforcing;
+policy changes would use the same temporary, removable module as earlier probes.
+
+1. Host SELinux facts (read-only, command below). Why: the image's servicemanager
+   calls `selinux_check_access` with Android classes (`service_manager`) and
+   Android-format contexts (`u:object_r:...`). Fedora's kernel policy has no such
+   classes or users. A temporary module can add types and rules but cannot add
+   object classes. Whether those checks deny depends on kernel behavior for
+   unknown classes (`deny_unknown`) and on whether the context strings validate.
+   Stage 1 reads those facts; it does not decide the outcome.
+2. Read what the image's servicemanager reads (read-only): the VINTF manifest and
+   service-contexts file paths and how `Access.cpp` builds the check, from the
+   image's libselinux and servicemanager strings/disassembly, as done for the
+   Service decoder.
+3. Choose the SELinux handling from stages 1-2: (a) host behavior already permits
+   the checks, (b) a temporary module grants what Fedora can express, or
+   (c) the checks cannot pass without changing the image or the policy classes,
+   in which case stop and report. No image binary is patched and no API is
+   intercepted.
+4. Fixtures inside the private namespace only: copy size-limited VINTF manifests
+   and service-contexts from the image to the paths it reads, and provide a
+   native property-service stand-in at the private `/dev/socket` so
+   `servicemanager.ready` can be set. Both are new native/script code, built and
+   run only after their runbook entries.
+5. First run: the real `servicemanager` as context manager, then the image's
+   `service list` against it (an empty-list success would be a real
+   servicemanager milestone). Then extend the native endpoint to register through
+   the real `addService` and rerun the Parcel client against it.
+6. Android receiving an FD remains a separate question: the stage-5 setup would
+   give an Android BBinder (servicemanager itself) that receives a dump
+   transaction FD, but nothing observable shows it reading FD data. Decide after
+   stage 5 whether another Android service is worth a probe.
+
+### One command: host SELinux facts (read-only)
+
+No storage is modified and nothing is installed. On the M1:
+
+```bash
+getenforce; for f in deny_unknown reject_unknown policyvers; do printf '%s=' $f; cat /sys/fs/selinux/$f; echo; done; ls /sys/fs/selinux/class 2>/dev/null | grep -c . ; ls /sys/fs/selinux/class | grep -E '^(service_manager|hwservice_manager|binder|property_service)$'
+```
+
+Say **get logs** with the output. `deny_unknown=0` would mean unknown classes
+are allowed by the kernel; `1` would mean denied. Either is only a fact until
+stage 2 shows how the image's code reacts.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
