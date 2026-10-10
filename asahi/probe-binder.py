@@ -39,7 +39,11 @@ def main():
                         help="with --real-servicemanager: run this image program (for example vendor_a:/bin/disk_info_service) as a server and call it with the image's service CLI")
     parser.add_argument('--fd-codes', metavar='FIRST-LAST',
                         help="with --serve-image: also try the service CLI with an FD argument for these transaction codes (1-32)")
+    parser.add_argument('--permissive', action='store_true',
+                        help="with --real-servicemanager: mark only the temporary gbos_binder_probe_t domain permissive so one run logs every denial it would hit")
     args = parser.parse_args()
+    if args.permissive and not args.real_servicemanager:
+        parser.error('--permissive requires --real-servicemanager')
     if args.fd_codes and not args.serve_image:
         parser.error('--fd-codes requires --serve-image')
     if args.fd_codes and not re.fullmatch(r'\d{1,2}-\d{1,2}', args.fd_codes):
@@ -377,6 +381,11 @@ def main():
                       '(allow gbos_binder_probe_t fs_t (filesystem (getattr)))']
             if optional['devdir']:
                 rules += [f'(allow gbos_binder_probe_t {optional["devdir"]} (dir (search getattr)))']
+        if args.permissive:
+            # Only this temporary domain; removed with the module. Unconfined clients are not changed.
+            rules += ['(typepermissive gbos_binder_probe_t)']
+            log('PERMISSIVE: gbos_binder_probe_t is permissive for this run only; Fedora stays enforcing.')
+            result['permissive_domain'] = 'gbos_binder_probe_t'
         policy = out / 'gbos_binder_probe.cil'
         policy.write_text(template + '\n'.join(rules) + '\n')
         result['policy'] = {'device_type': device_type, 'library_types': sorted(library_types),
@@ -593,7 +602,25 @@ def main():
         if installed:
             try:
                 if shutil.which('ausearch'):
-                    run(['sudo', 'ausearch', '-m', 'AVC,USER_AVC', '-ts', 'recent', '-i'], 'audit-denials', 30)
+                    denials = run(['sudo', 'ausearch', '-m', 'AVC,USER_AVC', '-ts', 'recent', '-i'], 'audit-denials', 30)
+                    # Unique denials that happened during this run (timestamps are local time).
+                    started = datetime.datetime.fromisoformat(result['start_time'])
+                    unique = {}
+                    for block in denials['stdout'].split('----'):
+                        stamp = re.search(r'msg=audit\((\d\d)/(\d\d)/(\d\d) (\d\d):(\d\d):(\d\d)', block)
+                        avc = re.search(r'avc:\s+denied\s+\{ ([^}]+) \}.*?scontext=\S*?:([A-Za-z0-9_]+):s0\S* tcontext=\S*?:([A-Za-z0-9_]+):s0\S* tclass=(\S+) permissive=(\d)', block, re.S)
+                        if not stamp or not avc:
+                            continue
+                        month, day, year, hour, minute, second = (int(x) for x in stamp.groups())
+                        when = datetime.datetime(2000 + year, month, day, hour, minute, second)
+                        if when < started.replace(microsecond=0):
+                            continue
+                        key = (avc[2], avc[3], avc[4], avc[1].strip(), avc[5])
+                        unique[key] = unique.get(key, 0) + 1
+                    lines = [f'{n}x {k[0]} -> {k[1]} {k[2]} {{ {k[3]} }} permissive={k[4]}' for k, n in sorted(unique.items())]
+                    result['denials_this_run'] = lines
+                    (out / 'denials-this-run.txt').write_text('\n'.join(lines) + '\n')
+                    log('DENIALS THIS RUN (' + str(len(lines)) + ' unique):\n' + '\n'.join(lines))
             except Exception as error:
                 log('Denial collection unavailable: ' + str(error))
         for limitation in result['limitations']:

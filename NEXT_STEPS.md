@@ -13,8 +13,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 6d" below, then paste
-its output.
+Next action: run the read-only `.rc` scan under "Run now: init .rc scan" and
+the stage 6d command below, then paste both outputs. The optional permissive
+run (one run, all denials) follows them.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -404,6 +405,51 @@ an Android-built Binder server registering with the real servicemanager (the
 image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
+
+## Run now: init `.rc` scan (read-only, plans a grouped service start)
+
+**This step does not modify the image or any system file.** It writes only one
+new `work/asahi/init-rc-*` result directory (a text report). Delete that
+directory to reverse it. Nothing from the image is executed.
+
+Why: instead of starting the image's whole `init` (which loads SELinux policy,
+mounts filesystems, runs ueventd and may reboot, so it is not proposed), the
+scan lists every service the image's `.rc` files declare, with executable,
+user, class, flags and sockets, and counts the risky non-service lines. The
+result decides which few services can be started together from one launcher in
+dependency order. The listing shows what is declared, not that a service can
+start outside Android init.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-init-rc.py
+```
+
+Paste the terminal output.
+
+## Optional: permissive probe domain, one run collects all denials
+
+**THIS STEP MODIFIES STORAGE** (same scope as stages 5 and 6: one new
+`work/asahi/real-servicemanager-*` directory, the temporary `gbos_binder_probe`
+SELinux module and one label on the new launcher, restored and removed by the
+runner, which refuses a preexisting module; private mounts end with the
+namespace; nothing else is written).
+
+What changes with `--permissive`, plainly:
+- The temporary module adds `(typepermissive gbos_binder_probe_t)`. Only the
+  servicemanager domain this probe creates becomes permissive, meaning its
+  denials are logged but not enforced.
+- Fedora stays enforcing. Every other process, including your session and the
+  probe's native endpoint, `service` clients and served image programs
+  (`unconfined_t`), is not loosened. Their binder rules still need explicit
+  entries.
+- The same cleanup removes the module afterwards; the run prints the unique
+  denials from this run only (`denials-this-run.txt`).
+
+Run it only after the two outputs above are in. Example for the stage 6d probe:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --permissive --serve-image system_a:/system/bin/gsid --fd-codes 9-24
+```
 
 ## Run now: stage 6d, try `gsid` codes 9 to 24 with the descriptor first
 
