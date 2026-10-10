@@ -2154,7 +2154,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3f complete; stage 3g (survey) is next
+## Graphics: stages 0, 1, 2 and 3a-3g complete; stage 3h (donor check) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2192,31 +2192,82 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3g, what the allocator service and mapper need (read only)
+### Next: Graphics stage 3h, are prebuilt minigbm binaries already here? (read only)
 
-The graphics core is now demonstrated under Bionic (stage 3f, below). What is
-left on the buffer side is minigbm's `cros_gralloc/` code: the AIDL allocator
-service (`aidl/`) and the stable-C mapper (`mapper_stablec/`), which the image
-reaches through `libui`. Those include Android headers the NDK lacks and, for
-the AIDL parts, generated code. This step does not build anything: it lists
-every header those sources include and whether the NDK sysroot has it, prints
-the service entry points, `Main.cpp`, the Soong files, init and VINTF
-snippets, and checks whether an AIDL compiler exists on this machine. The
-result decides how the service is built (shims, a hand-written Binder service,
-or a way to run AOSP's `aidl`); nothing is assumed.
+Stage 3g (below) shows building minigbm's allocator service and mapper from
+source needs a large part of AOSP. Before choosing a route, check what is
+already on this machine: the inherited VM port (`image/mica_graphics_port.py`)
+used prebuilt Cuttlefish arm64 binaries (`libminigbm_gralloc.so`,
+`libminigbm_gralloc4_utils.so`, `mapper.minigbm.so`, the allocator service,
+the V3/common AIDL libraries) read from `artifacts/graphics-port-review/`, and
+the checkout root has an untracked `artifacts/` directory. This step searches
+the checkout for them and reports ELF facts: architecture, 16 KiB load
+alignment, dependencies, which DRM driver name strings the gralloc library
+contains, and its `cros_gralloc_driver` symbols. If they are not here, the
+report says so and nothing else is assumed.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gralloc-survey-*` directory holding only
-`report.txt`. Everything else is only read; nothing is downloaded or built.
-Delete the directory to reverse.
+Creates one new `work/asahi/gralloc-donors-*` directory holding only
+`report.txt`. Everything else is only read; nothing is downloaded, built or run.
+Delete the directory to reverse. Needs `binutils` (`readelf`, `strings`, `nm`),
+which the earlier stages already used.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/survey-cros-gralloc.sh
+bash asahi/inspect-gralloc-donors.sh
 ```
 
-Send the printed `report.txt` (attach it, it will be long).
+Send the printed `report.txt`.
+
+### Result: Graphics stage 3g, allocator service and mapper sources (read, not built)
+
+Reported by the user from `work/asahi/gralloc-survey-evlPkFOk`; source facts
+from the patched minigbm copy and the stage 2c NDK sysroot:
+
+- The AIDL allocator service in this snapshot (`cros_gralloc/aidl/`) is built
+  against `android.hardware.graphics.allocator-V2-ndk`, matching the image's
+  V2. It registers `IAllocator/default` through `AServiceManager_addService`
+  (`Main.cpp`), runs a 4-thread Binder pool, and needs its manifest
+  fragment (`allocator.xml`, version 2) and init file (`allocator.rc`, user
+  `system`, groups `graphics drmrpc`, capability `SYS_NICE`). The mapper
+  (`mapper_stablec/Mapper.cpp`, 685 lines) implements the stable-C
+  `AIMapper` V5 interface and exposes `mapper.minigbm` with a `mapper` 5.0 /
+  `minigbm` VINTF fragment.
+- The NDK sysroot has the Binder C headers (`binder_ibinder.h`,
+  `binder_parcel.h`, `binder_status.h`), `hardware_buffer.h`, `native_window.h`,
+  `sync.h` and `log.h`, but not `android/binder_manager.h`,
+  `android/binder_process.h` or `android/binder_ibinder_platform.h`. It has
+  no `aidl/`, `cutils/`, `hardware/`, `sync/` or `vndk/` header directories.
+- Headers those sources include that the sysroot lacks: generated AIDL C++
+  (`aidl/android/hardware/graphics/allocator/*`, `.../common/*`), generated
+  HIDL (`android/hardware/graphics/mapper/4.0/IMapper.h`,
+  `.../common/1.2/types.h`, `hidl/*`), `aidlcommonsupport/NativeHandle.h`,
+  `android-base/*`, `BufferAllocator/BufferAllocator.h`,
+  `cutils/native_handle.h`, `gralloctypes/Gralloc4.h`, `hardware/gralloc.h`,
+  `log/log.h`, `sync/sync.h`, `system/graphics.h`, `system/window.h`, and the
+  stable-C mapper headers (`android/hardware/graphics/mapper/IMapper.h` and its
+  `utils/` headers). `xf86drm.h` shows as missing only because the survey did
+  not pass libdrm's include path.
+- No AIDL compiler is on this machine (`aidl` not on PATH, no package).
+- So a source build of the service and mapper needs: AOSP's `aidl` and HIDL
+  compilers to generate those headers, AOSP's libbase, libcutils, libhidl,
+  libaidlcommonsupport, libgralloctypes headers and sources, and the stable-C
+  mapper headers. That is a large part of AOSP, not a targeted change.
+
+Routes to choose between after stage 3h:
+
+1. Build from AOSP sources as above (largest; fetch the needed AOSP
+   repositories and build their tools for the host).
+2. Reuse prebuilt Cuttlefish service and mapper binaries (as the VM port did)
+   and replace only `libminigbm_gralloc.so` with one built from this patched
+   source. Needs the headers for `cros_gralloc/*.cc` only (`cutils`,
+   `hardware/gralloc.h`, `system/graphics.h`, `sync/sync.h`, a log shim) and the
+   donor's minigbm version to be ABI-compatible with this snapshot, which is
+   unchecked.
+3. Hand-write a Binder service for the allocator V2 interface on `binder_ndk`.
+   Not yet assessed; the parcel layouts would have to match the generated
+   code exactly.
 
 ### Result: Graphics stage 3f, minigbm and Honeykrisp in one Bionic process (passed)
 
