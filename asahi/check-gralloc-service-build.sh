@@ -32,6 +32,8 @@ INCS=$(find "$SRC" $EXTRA -type d \( -name include -o -name include_cpp -o -name
 echo "Include directories found in the fetched trees: $(echo "$INCS" | wc -l)"
 IFLAGS=
 for d in $INCS; do IFLAGS="$IFLAGS -I$d"; done
+# libfmq keeps MQDescriptorBase.h under base/, not include/.
+for d in "$W"/aosp-gralloc-more-*/system_libfmq/base; do [[ -d $d ]] && IFLAGS="$IFLAGS -I$d"; done
 LIBDRM_SRC=$(dirname "$LIBDRM_H")
 TOOL="clang++ --target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -resource-dir=$HK/clang-resource -std=gnu++20 -fsyntax-only -ferror-limit=0 -w"
 TOOL_PP="clang++ --target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -resource-dir=$HK/clang-resource -std=gnu++20 -w"
