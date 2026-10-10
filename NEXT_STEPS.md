@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5a", below) and paste its output.
+bring-up stage B5b", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -787,20 +787,28 @@ Operationally tested on the M1:
 - Not yet tested: a client connecting to the zygote socket, forking apps, and
   `system_server`.
 
-## Next action: bring-up stage B5a, zygote with --start-system-server (expected to fail at binder; the failure point is the result)
+## Results: bring-up stage B5a (`root-smoke-k52ps_gc`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4e: the
+- **My argument order was wrong, so no system_server was tried.** zygote's Java
+  side stopped with `Unknown command line argument: --start-system-server`:
+  `app_process` reads its own options only until the first one it does not know
+  (`--socket-name=zygote`), so the flag must come before it, as in the image's
+  `init.zygote64.rc` order (`--zygote --start-system-server --socket-name=zygote`).
+- Useful side result: the runtime's start-up options are in the log (the image's
+  `dalvik.vm.*` properties reached ART: `-Xmx512m`, `-Xusejit:true`,
+  `--cpu-abilist=arm64-v8a`, `cortex-a55` variant).
+
+## Next action: bring-up stage B5b, zygote with --start-system-server in the right order (expected to fail at binder; the failure point is the result)
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5a: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What it does: the same run as B4e for 45 seconds, but zygote is started with
-`--start-system-server`, so it forks `system_server` (uid 1000 inside the namespace,
-mapped to an unprivileged host id) on `SYSTEMSERVERCLASSPATH`. There is no
-`/dev/binder` and no `servicemanager` in this sandbox, so `system_server` is expected
-to stop at its first binder use. The point is to learn how far it gets and what it
-needs next (the log tail now hides preload noise and shows 60 lines).
+What changes: the flag is placed before `--socket-name`. Everything else is as in
+B5a; system_server is expected to stop at its first binder use (no `/dev/binder`
+and no `servicemanager` in this sandbox), and what it logs shows what it needs next.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server

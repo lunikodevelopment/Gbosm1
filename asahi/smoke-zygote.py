@@ -93,7 +93,9 @@ def launch_zygote(root, env_items):
         os.set_inheritable(s.fileno(), True)
         keep.append(s)
         env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
-    argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote", "--socket-name=zygote"] + flags
+    # app_process stops reading its own options at the first one it does not know (--socket-name),
+    # so --start-system-server must come before it, as in init.zygote64.rc
+    argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote"] + flags + ["--socket-name=zygote"]
     os.execve("/system/bin/app_process64", argv, env)
 
 
