@@ -8,9 +8,74 @@ Current status: Bionic Toybox execution and native private Binder echo both pass
 on Fedora Asahi ARM64/16 KiB. The dedicated Binder server domain ran with SELinux
 enforcing; its temporary module was removed and the new executable label restored.
 Qualcomm graphics adaptation remains required.
-Next development action: add Android-client syscall tracing and ensure descendant
-process cleanup after an alarm, then diagnose the client startup wait. No new
-user command is ready yet. Do not repeat the current service-list command.
+Next action: run the corrected client-tracing probe. Descendant cleanup and
+trace collection are implemented; target execution and the cause of the client
+wait are still pending. This command supersedes the previous untraced attempt.
+
+## One command: corrected libbinder diagnostics
+
+**THIS STEP MODIFIES STORAGE**
+
+Git updates source in `~/Gbosm1`, preserving history and stopping on conflicts.
+If missing, the command installs Fedora's `strace` package using dnf, affecting
+the root filesystem and RPM database. The probe creates a new
+`work/asahi/libbinder-probe-*` directory with runtime copies, syscall trace,
+report and logs. It reuses the already prepared runtime from the previous
+attempt and rechecks copied ELF files; source images and earlier reports remain
+retained. Existing per-file/library size limits remain in force.
+
+As before, the runner temporarily installs the dedicated SELinux server module
+and labels only the new native stub executable, affecting the policy store and
+active policy until cleanup. It restores the original label and removes the
+module afterward; manual reversal instructions are retained below. SELinux stays
+enforcing and this revision adds no policy permissions.
+
+Run as `gbos_user`; sudo is for the optional strace installation and the
+previously scoped policy/label operations:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && { command -v strace >/dev/null 2>&1 || sudo dnf install -y strace; } && python3 asahi/probe-binder.py --temporary-policy --android-service
+```
+
+The corrected runner creates a private **PID namespace** as well as private
+user/mount namespaces, with a private proc mount. Exiting the namespace's first
+process causes the kernel to terminate its remaining children. Explicit alarm
+handlers return 124 (rather than relying on PID 1's default signal behavior).
+The outer runner also terminates the isolated process group on every exit path,
+including when the launcher exits by itself. It observes the leader's exit
+without reaping it before terminating the group, preventing PID-reuse ambiguity.
+
+Before another attempt, the runner inspects earlier failed libbinder reports for
+surviving Android service clients. It uses pidfds to terminate only a process
+owned by the current user whose executable and full arguments exactly match a
+recorded client in that failed report's runtime directory. Unrelated processes
+are retained. Prior cleanup identities/results are saved in the new summary.
+
+Only the Android client is traced (`strace -f -tt -T -yy`); the dedicated server
+is not traced and gains no ptrace permission. `LD_LIBRARY_PATH` is passed to the
+Android tracee with strace's `-E`, so the host tracer uses its native libraries.
+The full trace is `android-runtime/client.trace`, and its last 100 lines are
+copied into `client-trace-tail.txt` and `report.txt`, including on failure.
+The trace can identify Binder opens/ioctls, property-file lookups, futex waits,
+retry sleeps or other startup activity. Its contents will guide the next fix;
+the missing linker configuration warning is not treated as the cause by itself.
+
+The private `/dev/binder` alias, tmpfs /dev overlay and proc mount are visible
+only inside the probe's namespaces. No Android system files or device aliases
+are installed on Fedora's host `/dev`.
+
+**Reversal:** let normal cleanup finish and confirm both context restoration and
+module removal returned 0. If interrupted, restore only the new executable's
+recorded original context and remove `gbos_binder_probe` as documented below.
+Delete only the new result directory after cleanup to reverse generated files.
+If strace was newly installed solely for this probe, removing that package with
+`sudo dnf remove strace` reverses its package installation; inspect the removal
+transaction before accepting it. Source versions remain recoverable in Git.
+
+After completion, say **get logs**. I will retrieve the summary, report and
+client trace from the HTTP directory listing. A diagnostic run may still stop;
+passing libbinder IPC will be claimed only when the verified stub reply, Android
+client output, exit status and cleanup results establish it.
 
 ## Retrieved libbinder attempt: incomplete
 
@@ -36,13 +101,12 @@ properties, namespace configuration or SELinux policy.
 The existing runner kills a process group on a Python timeout, but a launcher
 that exits from its own alarm can leave descendants running. Policy/label
 cleanup succeeded; this report does not prove every descendant exited or every
-private mount namespace was released. Add process-group cleanup and inspect for
-surviving probe processes before another attempt. Do not kill unrelated services.
+private mount namespace was released. This defect is corrected in the current runner; it also checks the recorded
+failed clients before the next run. Target verification is pending.
 
 ## Previous command: Android libbinder list request
 
-Retained as provenance; do not rerun until tracing and descendant cleanup are
-implemented.
+Retained as provenance. Use the corrected tracing command above for the next run.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -333,8 +397,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Diagnose the Android service client startup wait with syscall tracing and
-   reliable descendant cleanup before another libbinder attempt.
+1. Retrieve the corrected run's client syscall trace and cleanup results, then
+   resolve the observed startup wait before claiming libbinder success.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
