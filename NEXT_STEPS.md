@@ -2321,7 +2321,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3k complete; stage 3l (HIDL and gralloctypes dependencies) is next
+## Graphics: stages 0, 1, 2 and 3a-3l complete; stage 3m (build hidl-gen) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2359,30 +2359,56 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3l, the HIDL and gralloctypes dependencies
+### Next: Graphics stage 3m, build `hidl-gen` and generate the HIDL headers
 
-Stage 3k showed the allocator service needs HIDL-generated mapper 4.0 and
-graphics-common 1.2 headers plus `gralloctypes/Gralloc4.h`, none of which are
-in the trees fetched so far. This step fetches a few more sparse AOSP trees
-(`frameworks/native` gralloc/nativewindow/ui, `system/libhidl`,
-`system/memory/libdmabufheap`, `system/tools/hidl`) and prints exactly how
-`Allocator.cpp`, `Main.cpp` and `Mapper.cpp` use those APIs, so the next step
-can be chosen on evidence: build `hidl-gen` like `aidl` and generate the
-headers, or patch the HIDL use out of the service. Nothing is built or run. I
-have not been able to run it here.
+Stage 3l showed the allocator service (`Allocator.cpp`) really uses HIDL types:
+`mapper::V4_0::IMapper::BufferDescriptorInfo`, `common::V1_2::PixelFormat` and
+`BufferUsage` with their `toString`, and `gralloc4::decodeBufferDescriptorInfo`
+from `gralloctypes`. The stable-C mapper (`Mapper.cpp`) uses the stable-C
+mapper headers (present in `hardware/interfaces`) and the `gralloc4` metadata
+constants. So patching the HIDL use out is not trivial. Plan: generate the HIDL
+C++ headers and link the image's own `libhidlbase` and `libgralloctypes` (their
+presence in the image is still to be confirmed). This step builds `hidl-gen`
+natively the same way as `aidl` (its own sources plus `libbase` and the host
+`liblog` stand-in, no Soong) and generates headers for `android.hidl.base@1.0`,
+`graphics.common@1.0/1.1/1.2` and `graphics.mapper@4.0`. It needs two more
+Fedora packages. I have not been able to run it here, so build errors are likely.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/aosp-gralloc-extra-*` directory with sparse
-shallow clones (tens of MB) and `report.txt`. Nothing is installed. Delete the
-directory to reverse.
+Creates one new `work/asahi/hidl-build-*` directory (objects, `hidl-gen`,
+generated headers, `report.txt`). The only system change is the two dnf
+packages; reverse with `sudo dnf remove openssl-devel jsoncpp-devel` (if
+`openssl-devel` was already installed for other work, leave it).
 
 ```bash
+sudo dnf install openssl-devel jsoncpp-devel
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/inspect-gralloc-hidl-deps.sh
+bash asahi/build-hidl-gen-host.sh
 ```
 
 Send the printed `report.txt`.
+
+### Result: Graphics stage 3l, HIDL and gralloctypes dependencies
+
+Reported by the user from `work/asahi/aosp-gralloc-extra-aE4XIsEB` (7.0 MB,
+android16-release; frameworks/native 2827a4a1, system/libhidl 93f79786,
+system/tools/hidl 9118bce2; `system/memory` clone failed, wrong repository
+path, not needed by the service includes seen so far).
+
+- Now in the trees: `system/window.h` (nativewindow), `gralloctypes/Gralloc4.h`,
+  `hidl/HidlSupport.h`. Still not found anywhere: `system/graphics.h` and
+  `BufferAllocator/BufferAllocator.h`.
+- `libgralloctypes` depends on `android.hardware.graphics.mapper@4.0`,
+  `libhidlbase`, `liblog` and `graphics.common-V6-ndk`.
+- `Allocator.cpp` includes `aidlcommonsupport/NativeHandle.h`, `gralloctypes/Gralloc4.h`
+  and `cros_gralloc/gralloc4/CrosGralloc4Utils.h` and uses the HIDL types above.
+  `Main.cpp` uses only Binder NDK (`binder_manager.h`, `binder_process.h`).
+  `Mapper.cpp` includes the stable-C `android/hardware/graphics/mapper/IMapper.h`,
+  `utils/IMapperMetadataTypes.h` and `utils/IMapperProvider.h`.
+- HIDL sources present for generation: `graphics/common/1.0/1.1/1.2 types.hal`,
+  `graphics/mapper/4.0/IMapper.hal` and `types.hal`. `hidl-gen` sources are
+  present (it needs libbase, libcrypto and libjsoncpp).
 
 ### Result: Graphics stage 3k, service build check (syntax-only)
 
