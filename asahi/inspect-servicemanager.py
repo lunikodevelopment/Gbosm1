@@ -21,6 +21,8 @@ HINTS = re.compile(rb"(servicemanager|ctl\.|selinux|ready|dump|vintf|perfetto|la
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--path", default="/system/bin/servicemanager", help="absolute system_a path of one ELF file")
+    p.add_argument("--part", default="system_a", help="partition name from the image (default system_a)")
+    p.add_argument("--ls", action="store_true", help="list the directory at --path instead of copying a file")
     p.add_argument("--previous", help="completed recovery-audit directory (default: latest)")
     args = p.parse_args()
     if os.geteuid() == 0:
@@ -44,16 +46,25 @@ def main():
     helpers = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helpers)
     _, logical = helpers.partitions(image)
-    extents = logical["system_a"]["extents"]
+    if args.part not in logical:
+        p.error("unknown partition: " + args.part)
+    extents = logical[args.part]["extents"]
     if len(extents) != 1 or "offset" not in extents[0]:
-        p.error("system_a is not one linear extent")
+        p.error("partition is not one linear extent")
     print("THIS STEP MODIFIES STORAGE")
     print("Creates one new servicemanager-inspect report directory under work/asahi. The image is only read.")
     print("Delete the newly printed result directory to reverse it.")
     parent.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix="servicemanager-inspect-", dir=parent)).resolve()
     print(f"Results: {out}")
-    print(f"File: system_a:{args.path}")
+    print(f"{'Directory' if args.ls else 'File'}: {args.part}:{args.path}")
+    if args.ls:
+        r = subprocess.run(["dump.erofs", f"--offset={extents[0]['offset']}", f"--path={args.path}", "--ls", str(image)],
+                           capture_output=True, timeout=120)
+        text = r.stdout.decode(errors="replace")
+        (out / "listing.txt").write_text(text)
+        print(text if r.returncode == 0 else "listing failed (status %d)" % r.returncode)
+        return
     r = subprocess.run(["dump.erofs", f"--offset={extents[0]['offset']}", f"--path={args.path}",
                         "--cat", str(image)], capture_output=True, timeout=120)
     if r.returncode or len(r.stdout) > LIMIT:

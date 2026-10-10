@@ -11,8 +11,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the stage 2 libselinux read-only check below (plan stages in
-the plan section). Retain all earlier results; no completed probe needs rerunning.
+Next action: run the stage 4 fixture-directory listing below. Retain all earlier
+results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
 
@@ -105,15 +105,44 @@ Reading of the code (my interpretation of the disassembly, not run):
 Conclusion so far: consistent with, but not proof of, the unknown-class check
 passing on this host. One more read-only look settles it.
 
-### One command: finish the selinux_check_access read (stage 2, read-only)
+### Stage 2 result: selinux_check_access (image libselinux)
 
-No storage is modified. On the M1:
+Reported by the user; reading is my interpretation of the ARM64 disassembly,
+not a run. The helper at 0xe230 builds a path in a 4096-byte buffer from a
+stored selinuxfs mount pointer, opens it, reads up to 19 bytes and parses an
+integer; that matches `security_deny_unknown` reading `<selinuxfs>/deny_unknown`.
+In `selinux_check_access`, an unknown class (string_to_security_class returns 0)
+calls this helper at every exit path: a result of 0 returns 0 (allowed), anything
+else returns -1 with the saved errno. With the host's `deny_unknown=0` the
+unknown-class `service_manager` check should therefore return allowed. Still
+unverified: the selinuxfs mount pointer is set (the helper takes another path,
+not seen, if it is null), whether the two earlier context conversions accept
+the Android-format `u:object_r:...` strings, and the other servicemanager
+checks (service-contexts lookup must find a match, else "No match for" denies).
+
+Stage 3 decision: continue with option (a) (host behavior permits the check, no
+policy module needed for it), to be confirmed by the first run. Stop and report
+if a run shows a denial.
+
+### One command: list the fixture directories (stage 4, read-only)
+
+**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+
+Scope: creates three new `work/asahi/servicemanager-inspect-*` directories with a
+`listing.txt` each. The image is only read; nothing is executed. Reversal:
+delete the newly printed result directories. The script gained `--part` and
+`--ls` options (still read-only).
+
+Why: the real servicemanager needs VINTF manifests and service-contexts files
+at the paths it reads. This shows which exist in the image before any copy.
 
 ```bash
-cd ~/Gbosm1/work/asahi/servicemanager-inspect-4e70qfl1 && objdump -d --no-show-raw-insn --start-address=0xd6dc --stop-address=0xd780 libselinux.so | tail -n +7 | head -60; echo ----; objdump -d --no-show-raw-insn --start-address=0xe230 --stop-address=0xe2c0 libselinux.so | tail -n +7 | head -60
+cd ~/Gbosm1 && git pull --ff-only && for spec in "system_a /system/etc/vintf" "vendor_a /vendor/etc/vintf" "system_a /system/etc/selinux"; do set -- $spec; python3 asahi/inspect-servicemanager.py --part $1 --path $2 --ls 2>&1 | grep -v 'THIS STEP\|Creates one\|Delete the'; done
 ```
 
-Say **get logs** with the output.
+If a directory is absent or the partition mount path differs (the vendor
+partition may expose `/etc/vintf` rather than `/vendor/etc/vintf`), say so and I
+will adjust the path. Say **get logs** with the output.
 
 ## Completed inspection: the image's servicemanager (read-only)
 
