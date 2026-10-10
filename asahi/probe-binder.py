@@ -174,7 +174,15 @@ def main():
             extraction = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(extraction)
             result['android_runtime'] = extraction.prepare(out, log)
+            result['property_fixture'] = {
+                'path': '/dev/__properties__', 'scope': 'private mount namespace only',
+                'format': 'Bionic ContextsPreSplit, magic 0x504f5250, version 0xfc6ed0ab',
+                'properties': {'servicemanager.ready': 'true'},
+                'publication': 'after native context-manager readiness handshake',
+                'property_service_started': False,
+            }
             result['limitations'] = ['Android service list against a native empty-list stub only; no Android servicemanager or services are started.',
+                                    'servicemanager.ready is a private immutable fixture for the ready stub; Android init/property service and split property contexts are not demonstrated.',
                                     'Object/FD transfer, complete namespaces, VINTF, HALs and graphics remain untested.']
             log('Temporary /dev overlay and Binder alias are private to the child mount namespace.')
         result['build'] = run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', str(source), '-o', str(binary)], 'build', 60)
@@ -260,10 +268,15 @@ def main():
         result['execution'] = run(command, 'service-list' if args.android_service else 'echo', 40)
         marker = 'LIBBINDER_LIST=PASS' if args.android_service else 'BINDER_ECHO=PASS'
         output = result['execution']['stdout']
-        if args.android_service and ('LIBBINDER_STUB_REPLY=PASS' not in output or 'Found 0 services:' not in output):
-            raise RuntimeError('service client and stub did not both report expected results')
+        if args.android_service:
+            required_markers = ('STUB_READY_PROPERTY=CREATED', 'LIBBINDER_STUB_REPLY=PASS',
+                                'Found 0 services:', 'LIBBINDER_LIST=PASS')
+            missing = [item for item in required_markers if item not in output]
+            result['missing_markers'] = missing
+            if missing:
+                raise RuntimeError('libbinder probe missing expected evidence: ' + ', '.join(missing))
         if result['execution']['returncode'] or marker not in output:
-            raise RuntimeError('private Binder echo did not pass; retain namespace/mount/driver diagnostics')
+            raise RuntimeError('private Binder execution did not pass; retain namespace/mount/driver diagnostics')
         result['exit_status'] = 0
     except Exception as error:
         result['error'] = f'{type(error).__name__}: {error}'
