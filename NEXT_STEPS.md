@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5b", below) and paste its output.
+bring-up stage B5c", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -798,24 +798,40 @@ Operationally tested on the M1:
   `dalvik.vm.*` properties reached ART: `-Xmx512m`, `-Xusejit:true`,
   `--cpu-abilist=arm64-v8a`, `cortex-a55` variant).
 
-## Next action: bring-up stage B5b, zygote with --start-system-server in the right order (expected to fail at binder; the failure point is the result)
+## Results: bring-up stage B5b (`root-smoke-1qghjohy`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5a: the
+- **With the flag in the right place, zygote reached `forkSystemServer` and the
+  runtime aborted inside `Zygote.nativeForkSystemServer`** (Java frames
+  `Zygote.forkSystemServer(Zygote.java:514)`, `ZygoteInit.main(ZygoteInit.java:891)`;
+  native frames in `libandroid_runtime.so` and `libart.so`). Zygote exited with
+  status 1 before any system_server code ran, so binder was not yet involved.
+- **The abort reason is not yet known**: it is a line logged before the stack dump,
+  and the 40-line log tail started inside the dump. That fork step does
+  `setgroups`, `setresgid`/`setresuid` to 1000, `capset`, `prctl` and seccomp
+  setup; which one the unprivileged namespace refuses is unconfirmed.
+- Also seen: the crash handler cannot run (expected), and the dump's frames show
+  host paths because the tree is bind-mounted.
+
+## Next action: bring-up stage B5c, same run, now printing the abort reason and the credential syscalls
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5b: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: the flag is placed before `--socket-name`. Everything else is as in
-B5a; system_server is expected to stop at its first binder use (no `/dev/binder`
-and no `servicemanager` in this sandbox), and what it logs shows what it needs next.
+What changes: a new section prints only the error and fatal log lines, without the
+stack dump, which includes the abort reason; and the trace also records `setgroups`,
+`setresuid`, `setresgid`, `capset`, `prctl`, `unshare`, `mount`, `seccomp` calls, so
+the failing one is named in the "failed calls" list.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
 ```
 
 Its first line reads `=== BRING-UP THREAD, STAGE B5a`. Paste only the command output
-(not the prompt line) into this thread, "Remaining steps to boot Android".
+(not the prompt line, and no stray characters) into this thread, "Remaining steps to
+boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 

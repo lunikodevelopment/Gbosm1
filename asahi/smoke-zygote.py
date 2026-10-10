@@ -57,7 +57,7 @@ echo "classpath variables: $(printf '%s ' "${CPENV[@]%%=*}")"
 
 say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
-if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network' -o "$OUT/zygote.trace"); else TR=(); fi
+if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority' -o "$OUT/zygote.trace"); else TR=(); fi
 "${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
 ZPID=$!
 for i in $(seq 1 "$WAIT"); do kill -0 "$ZPID" 2>/dev/null || break; sleep 1; done
@@ -67,9 +67,11 @@ echo "--- zygote socket:"; ls -l "$ROOT/dev/socket" 2>&1 | cut -c1-120
 echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf '%s %s\n' "${p##*/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
 echo "--- logcat -d, last 40 (zygote, ART, libc, DEBUG):"
 timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | grep -v -E 'derive_classpath|CompatibilityRules|Resources:|nativeloader: (Load|Configuring)|ApplicationLoaders' | tail -n 60 | cut -c1-260
+echo "--- logcat -d, fatal and error lines only, without the abort stack dump (the reason for an abort is here):"
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -v time '*:E' 2>&1 | grep -v -E 'runtime.cc:769|derive_classpath|Zygote  :.*(\tat|at com)' | head -n 40 | cut -c1-300
 if [ -s "$OUT/zygote.trace" ]; then
   echo "--- failed file/network calls in the trace, distinct (first 30):"
-  grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
+  grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload|SO_DOMAIN|/mnt/expand|resource-cache|/sys/devices/system/cpu|trace_marker|qgl_config|statsdw' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
   echo "--- last 10 trace lines:"; tail -n 10 "$OUT/zygote.trace" | cut -c1-200
 fi
 pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" 2>/dev/null
