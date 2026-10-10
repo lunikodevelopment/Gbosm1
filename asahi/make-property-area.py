@@ -74,6 +74,10 @@ def derive_product_properties(props):
         parts = full.split(".")
         if len(parts) > 3 and parts[:2] == ["ro", "product"] and parts[2] in order:
             names.setdefault(".".join(parts[3:]), []).append((order.index(parts[2]), props[full]))
+    for full in list(props):  # older spelling: ro.<partition>.product.<x>
+        parts = full.split(".")
+        if len(parts) > 3 and parts[0] == "ro" and parts[2] == "product" and parts[1] in order:
+            names.setdefault(".".join(parts[3:]), []).append((order.index(parts[1]) + 0.5, props[full]))
     for rest, values in names.items():
         props.setdefault("ro.product." + rest, min(values)[1])
 
@@ -172,6 +176,9 @@ def main():
     for extra in sys.argv[3:]:
         name, value = extra.split("=", 1)
         props[name] = value
+    for name in sorted(props):
+        if "abilist" in name:
+            print(f"  {name}={props[name]}")
     top, skipped = build(props)
     data = write(top)
     out = Path(sys.argv[2])

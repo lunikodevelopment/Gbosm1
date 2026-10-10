@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B4c", below) and paste its output.
+bring-up stage B4d", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -747,17 +747,25 @@ Operationally tested on the M1:
 - Everything else is unchanged: zygote socket passed, `logd`, `linkerconfig` and
   `derive_classpath` fine; the abort report cannot reach a crash handler (expected).
 
-## Next action: bring-up stage B4c, zygote preload with derived ro.product.* properties
+## Results: bring-up stage B4c (`root-smoke-tkdxqf3a`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4b: the
-rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
-(logs, trace); private tmpfs takes the rest and vanishes at exit. Loss: none.
-Reversal: delete the printed directory. No sudo, no SELinux module, no binder, no
-partition, boot or flash change.
+- Deriving `ro.product.<x>` from `ro.product.<partition>.<x>` added only 5 properties
+  (565 to 570) and `ro.product.cpu.abilist64` is still missing, so `app_process64`
+  aborted with the same message. My assumption about the source name was wrong or
+  incomplete; I do not yet know which name the image's build.prop files use for the
+  ABI list (no listing of them is in this repository).
 
-What changes: `asahi/make-property-area.py` now fills each plain `ro.product.<x>`
-from the first partition in `odm,vendor,product,system_ext,system` (or the image's
-own `ro.product.property_source_order`) that defines `ro.product.<partition>.<x>`.
+## Next action: bring-up stage B4d, same test; the property stand-in prints every ABI-list property it finds
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4c: the
+rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory;
+private tmpfs takes the rest. Loss: none. Reversal: delete the printed directory.
+No sudo, no SELinux module, no binder, no partition, boot or flash change.
+
+What changes: `make-property-area.py` also accepts the older `ro.<partition>.product.<x>`
+spelling (e.g. `ro.vendor.product.cpu.abilist64`), and prints every property whose
+name contains `abilist` right under the "S0 property area" header. That printout
+shows which names the image really defines, so the next fix rests on evidence.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py
