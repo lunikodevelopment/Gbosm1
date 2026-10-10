@@ -8,11 +8,81 @@ Current status: Bionic Toybox execution passed. The private Binder probe built,
 mounted binderfs, allocated a device and reported protocol 8 on 16 KiB pages,
 but stopped at context-manager registration with `Permission denied`.
 No Binder payload exchange has passed.
-Next development action: prepare a dedicated SELinux domain for the Binder
-probe, with permissions derived from the observed operation and device labels.
-No new user command is required yet. A policy has not been prepared or installed;
-retain enforcement and do not grant all unconfined programs context-manager
-permission.
+Next action: run the revised Binder probe with a temporary, dedicated SELinux
+server domain. The module is removed after the attempt and enforcement remains
+active. Target execution of this revision is pending; additional denials are
+possible and will be retained for review.
+
+## One command: Binder echo with a dedicated server domain
+
+**THIS STEP MODIFIES STORAGE**
+
+Git updates source in `~/Gbosm1`, preserving history and stopping on conflicts.
+The runner creates a new `work/asahi/binder-probe-*` directory and a shared
+`work/asahi/binder-policy.lock`. It builds a native probe, reads the actual
+private binderfs device/root labels and native library/directory/log labels,
+and saves the generated policy as `gbos_binder_probe.cil` for review.
+
+Using sudo, it temporarily installs module `gbos_binder_probe` into Fedora's
+SELinux policy store under `/var/lib/selinux`, changes only the new executable's
+SELinux label, and later restores that label and removes the module. The policy
+store and active policy are affected until cleanup completes. A failed/interrupted
+cleanup may leave that module installed or the new executable specially labeled.
+Existing modules are retained; the runner stops if this module name already
+exists. Keep the terminal open until the cleanup result is printed.
+
+Run as `gbos_user` (sudo may request your password for the policy operations):
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy
+```
+
+Only the echo server explicitly transitions via `runcon` into
+`gbos_binder_probe_t`. There is no automatic transition rule, permissive domain,
+unconfined attribute, network permission or mount capability in that domain.
+Context-manager registration is allowed for that domain itself; Binder calls
+are allowed only between it and the observed `unconfined_t` client domain.
+The client stays in its existing domain. Binder devices are opened after the
+server transition, so their driver mappings belong to the correct address space.
+
+The server's device/library/path rules use actual target **types**, not individual
+path isolation: any object bearing one of those types has the same SELinux
+permission. Entry into the domain uses the separately labeled probe executable.
+Runtime libraries/cache are readable/mappable; inherited report files are writable;
+no report file create/open-write rule is added. The generated CIL and module
+install logs are retained. This is a focused development policy, not an Android
+service policy. No packages are installed and no policy is generated from a
+blanket audit2allow invocation.
+
+The binderfs mount remains inside private user/mount namespaces and disappears
+when they exit. The server/client run without host root privileges. The runner
+checks enforcement before execution; enforcement is never disabled. It records
+the echo outcome, cleanup return codes and recent AVCs when `ausearch` is present.
+If tools, policy compilation, transition or IPC fail, retain the report instead
+of widening policy permissions manually.
+
+**Reversal:** normal cleanup restores the new executable's original context and
+removes the temporary module. If cleanup reports failure, use the new result
+directory's saved `restore-context` command/log to restore its recorded original
+context; then remove only this module:
+
+```bash
+sudo semodule -r gbos_binder_probe
+```
+
+If interrupted before a restore-context log exists, restore the context recorded
+for the executable in `summary.json` (when available), or run `sudo restorecon -v`
+on only that result directory's `binder-echo` before module removal. Delete only
+the newly printed result directory after restoring its label to reverse report
+and binary writes. Source versions remain recoverable through Git. The lock file
+may remain and contains no policy; kernel flock state is released at process exit.
+
+Keep the HTTP server available. After the command finishes, say “get logs” and
+I will retrieve the latest result directory from
+`http://192.168.178.47:8000/work/asahi/`.
+`BINDER_ECHO=PASS` plus successful cleanup would establish native Binder
+transaction/reply operation only; Android libbinder and HAL integration remain
+untested.
 
 ## Confirmed SELinux denial
 
@@ -151,8 +221,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Prepare a dedicated SELinux probe domain from the confirmed context-manager
-   denial, then establish native Binder transactions before Android integration.
+1. Run the dedicated-domain Binder probe and review IPC and cleanup results
+   before Android libbinder integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
@@ -167,4 +237,3 @@ Do not run inherited VM `fetch.sh`, `install.sh`, `build-image.sh` or
 `update-image.sh` for this audit. `fetch.sh` is a macOS workflow that also
 downloads UTM and Cuttlefish artifacts. [asahi/README.md](asahi/README.md) provides
 technical background; [UPSTREAM.md](UPSTREAM.md) describes the original VM workflow.
-
