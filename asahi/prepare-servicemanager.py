@@ -157,6 +157,13 @@ def prepare(out, log):
     for item in result['fixtures']:
         log(f"FIXTURE {item['source']} -> {item['dest']} ({item['bytes']} bytes)")
 
+    # Fedora's libselinux (used by runcon inside the root) treats SELinux as enabled
+    # only when /etc/selinux/config exists; the first run's trace showed it checking.
+    config = root / 'etc' / 'selinux' / 'config'
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(Path('/etc/selinux/config').read_text() if Path('/etc/selinux/config').is_file()
+                      else 'SELINUX=enforcing\nSELINUXTYPE=targeted\n')
+    log('Copied the host /etc/selinux/config text into the private root (existence check only).')
     # Mount points and symlinks for the Fedora tools used inside the root.
     for relative in ('usr', 'dev', 'proc', 'sys/fs/selinux', str(runtime.relative_to('/'))):
         (root / relative).mkdir(parents=True, exist_ok=True)

@@ -12,7 +12,7 @@ The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
 Next action: rerun the one command under "Run now: real servicemanager first
-run (stage 5a)" (the `/usr` bind is fixed), then say **get logs**.
+run (stage 5a)" (the `/etc/selinux/config` fixture is added), then say **get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -221,6 +221,19 @@ kernel rule and not verified: a non-recursive bind of a tree that contains a
 mount inherited from the parent namespace is refused. Change: the launcher now
 binds `/usr` recursively (`MS_REC`), which carries that mount along. The next run
 tests this; the cleanup and policy steps are unchanged.
+
+### Second 5a run: root built, `runcon` refused inside it
+
+Reported by the user (`work/asahi/real-servicemanager-sqnoccec`): the recursive
+`/usr` bind worked and the whole private root came up (`SERVICEMANAGER_ROOT=READY`).
+Then `runcon` printed `/usr/bin/runcon may be used only on a SELinux kernel` and
+exited 125, so **servicemanager still never started**. Cleanup codes 0, no AVC
+denials. The trace shows `statfs("/sys/fs/selinux")` succeeding with
+`SELINUX_MAGIC`, then `faccessat("/etc/selinux/config")` returning ENOENT right
+before the message. So the selinuxfs bind is fine; Fedora's libselinux evidently
+also wants that config file to exist (my reading of the trace, not of its source).
+Change: the extraction now writes a copy of the host `/etc/selinux/config` text
+into the private root. Nothing else changed.
 
 ## Run now: real servicemanager first run (stage 5a)
 
