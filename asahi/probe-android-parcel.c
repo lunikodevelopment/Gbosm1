@@ -168,18 +168,21 @@ static void parcel_server(const char *path, int ready) {
             size_t pos = parcel_token(request, "android.os.IServiceManager");
             pos = parcel_string(data, request.data_size, pos, "gbos.parcel");
             require(pos == request.data_size, "unsupported checkService2 trailing layout");
-            /* Status EX_NONE, Service union tag=serviceWithMetadata(0), then the
-             * present word (1) read by this image's Parcel::readParcelable, then the
-             * sized ServiceWithMetadata parcelable: binder + stability + lazy bool.
-             * Binder begins at offset 16, which is legal 4-byte Parcel alignment. */
-            int32_t present = 1, size = 36, stability = 12, lazy = 1;
-            memcpy(response + 8, &present, 4); memcpy(response + 12, &size, 4);
+            /* Status EX_NONE, then the present word (1) the generated client's
+             * readParcelable consumes for the returned Service, then the union tag
+             * serviceWithMetadata(0), then the present word (1) read by this
+             * image's Parcel::readParcelable for the inner parcelable, then the
+             * sized ServiceWithMetadata: binder + stability + lazy bool.
+             * Binder begins at offset 20, which is legal 4-byte Parcel alignment. */
+            int32_t outer_present = 1, tag = 0, present = 1, size = 36, stability = 12, lazy = 1;
+            memcpy(response + 4, &outer_present, 4); memcpy(response + 8, &tag, 4);
+            memcpy(response + 12, &present, 4); memcpy(response + 16, &size, 4);
             struct flat_binder_object object = {0}; object.hdr.type = BINDER_TYPE_BINDER;
             object.flags = FLAT_BINDER_FLAG_ACCEPTS_FDS; object.binder = parcel_object; object.cookie = parcel_cookie;
-            memcpy(response + 16, &object, sizeof(object));
-            memcpy(response + 40, &stability, 4); memcpy(response + 44, &lazy, 4);
-            length = 48; object_offset = 16; object_count = 1; looked_up = 1;
-            puts("PARCEL_LOOKUP_REPLY=READY: 48-byte reply (status, tag, present, size, binder with stability, lazy) for a controlled service Binder object.");
+            memcpy(response + 20, &object, sizeof(object));
+            memcpy(response + 44, &stability, 4); memcpy(response + 48, &lazy, 4);
+            length = 52; object_offset = 20; object_count = 1; looked_up = 1;
+            puts("PARCEL_LOOKUP_REPLY=READY: 52-byte reply (status, outer present, tag, present, size, binder with stability, lazy) for a controlled service Binder object.");
         } else if (endpoint && request.code == PARCEL_CODE) {
             require(looked_up && described && request.offsets_size == sizeof(binder_size_t),
                     "missing decoded object/descriptor or FD offset");

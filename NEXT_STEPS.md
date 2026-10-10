@@ -14,18 +14,24 @@ Next action: rerun the Android Parcel probe below with the corrected lookup
 reply. Retain the completed native object/FD and Android empty-list results;
 those probes do not need to be rerun.
 
-## Cause found for the rejected lookup reply
+## Lookup reply: inner present word did not fix it
 
-Disassembly of `Parcel::readParcelable` in the image's libbinder (reported, at
-0x6c260): it reads an int32 and calls the parcelable's `readFromParcel` only if
-that word is 1; otherwise it returns 0x80000008 (UNEXPECTED_NULL). The probe's
-reply put the sized-parcelable length (36) directly after the union tag, so the
-client read 36, treated the service as null and printed `does not exist`.
-The corrected reply inserts the present word: status 0, tag 0, present 1,
-size 36, binder object (offset 16) plus stability 12, lazy bool; 48 bytes.
-This is a static finding from the image's code; the corrected reply is built
-(compiles) but not yet executed. The earlier read-only inspection steps are
-complete and need no rerun.
+`Parcel::readParcelable` in the image's libbinder (reported, 0x6c260) reads an
+int32 and decodes only if it is 1, else returns UNEXPECTED_NULL. The probe was
+changed to insert that word before the sized `ServiceWithMetadata` (48-byte
+reply). A confirmed run of that version (`PARCEL_LOOKUP_REPLY=READY: 48-byte
+reply ...`, commit 882722b, result directory
+`work/asahi/android-parcel-probe-3n45nvjg`) still ended with
+`Service gbos.parcel does not exist`. So the inner word was not the only fault.
+
+Working hypothesis, not verified against the image: the generated
+checkService2 client also reads the returned `Service` with `readParcelable`,
+which consumes a present word before the union's own tag (the union decoder
+reads its tag first, with no size). The previous reply put the union tag at
+offset 4, where that word would be read as 0. The probe now emits a 52-byte
+reply: status 0, present 1, tag 0, present 1, size 36, binder (offset 20) plus
+stability 12, lazy bool. This is untested; if it fails again, the checkService2
+client in `libbinder.so` (`BpServiceManager::checkService2`) needs reading.
 
 ## One command: Android returned object and outgoing FD Parcel
 
@@ -76,7 +82,7 @@ controlled native endpoint with one private service lookup; it is not Android
 servicemanager, service registration or a HAL. The endpoint:
 
 1. Checks the `android.os.IServiceManager` token and the exact `gbos.parcel`
-   lookup name. Its checkService2 reply contains a `Service` union, a present word of 1 and a
+   lookup name. Its checkService2 reply contains a `Service` union, outer and inner present words of 1 and a
    sized `ServiceWithMetadata` with the Binder object, system stability and
    lazy metadata. These are explicit fixtures for the scoped lookup.
 2. Returns an interface descriptor on the object. It then verifies that the
