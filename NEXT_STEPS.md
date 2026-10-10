@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5k", below) and paste its output.
+bring-up stage B5l", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -915,19 +915,28 @@ Operationally tested on the M1:
   tree's `/`.) On a device, init stays in that namespace, so it survives. A throwaway
   test here reproduced both cases: `/` without a process left behind, `/dev/urandom` with one.
 
-## Next action: bring-up stage B5k, keep the launcher's mount namespace alive
+## Results: bring-up stage B5k (`root-smoke-3ncn2q2t`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5j: the
+- **The namespace fix worked** (operationally tested): `/dev/urandom` is no longer refused,
+  and the trace shows zygote's own `unshare(CLONE_NEWNS)` followed by
+  `mount("rootfs", "/", MS_REC|MS_SLAVE)`, confirming the B5j explanation.
+- **Next refusal: descriptor 62 = the test's log file** (`Not allowlisted (62):
+  .../root-smoke-3ncn2q2t/zygote.out`). The trace shows `fcntl(1, F_DUPFD_CLOEXEC) = 62`:
+  zygote duplicated its standard output, which the test had pointed at a log file.
+  On a device init starts zygote with stdin, stdout and stderr on `/dev/null`.
+
+## Next action: bring-up stage B5l, zygote's standard input and output on /dev/null
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5k: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: just before starting `app_process64`, the launcher forks one helper that
-closes all its descriptors and sleeps in the namespace (it is killed when zygote exits),
-the role init plays on a device. The output also lists the trace's `unshare`/`mount`
-calls so zygote's own unshare is visible. Expected: the "Not allowlisted" stop goes away
-and zygote forks system_server, which should then stop at its first binder use.
+What changes: right before starting `app_process64` the launcher points descriptors
+0, 1 and 2 at `/dev/null`, as init does. zygote's messages still arrive in `logcat`
+(the process-output section will show only the launcher's lines). Expected: zygote
+forks system_server, which should then stop at its first binder use.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server

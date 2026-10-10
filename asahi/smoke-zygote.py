@@ -193,6 +193,13 @@ def launch_zygote(root, env_items):
             except OSError:
                 pass
     keep_namespace_alive()
+    # init starts zygote with stdin, stdout and stderr on /dev/null; zygote duplicates stdout,
+    # and a descriptor on the test's log file is not on its allowlist (B5k). Its messages go to logcat.
+    print("stdio of zygote now /dev/null; its output is in logcat", flush=True)
+    null = os.open("/dev/null", os.O_RDWR)
+    for number in (0, 1, 2):
+        os.dup2(null, number)
+    os.close(null)
     argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote"] + flags + ["--socket-name=zygote"]
     os.execve("/system/bin/app_process64", argv, env)
 
