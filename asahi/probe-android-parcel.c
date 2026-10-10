@@ -168,16 +168,17 @@ static void parcel_server(const char *path, int ready) {
             size_t pos = parcel_token(request, "android.os.IServiceManager");
             pos = parcel_string(data, request.data_size, pos, "gbos.parcel");
             require(pos == request.data_size, "unsupported checkService2 trailing layout");
-            /* Status EX_NONE, Service union tag=serviceWithMetadata(0), sized
-             * ServiceWithMetadata parcelable: binder + stability + lazy bool.
-             * Binder begins at offset 12, which is legal 4-byte Parcel alignment. */
-            int32_t size = 36, stability = 12, lazy = 1;
-            memcpy(response + 8, &size, 4);
+            /* Status EX_NONE, Service union tag=serviceWithMetadata(0), then the
+             * present word (1) read by this image's Parcel::readParcelable, then the
+             * sized ServiceWithMetadata parcelable: binder + stability + lazy bool.
+             * Binder begins at offset 16, which is legal 4-byte Parcel alignment. */
+            int32_t present = 1, size = 36, stability = 12, lazy = 1;
+            memcpy(response + 8, &present, 4); memcpy(response + 12, &size, 4);
             struct flat_binder_object object = {0}; object.hdr.type = BINDER_TYPE_BINDER;
             object.flags = FLAT_BINDER_FLAG_ACCEPTS_FDS; object.binder = parcel_object; object.cookie = parcel_cookie;
-            memcpy(response + 12, &object, sizeof(object));
-            memcpy(response + 36, &stability, 4); memcpy(response + 40, &lazy, 4);
-            length = 44; object_offset = 12; object_count = 1; looked_up = 1;
+            memcpy(response + 16, &object, sizeof(object));
+            memcpy(response + 40, &stability, 4); memcpy(response + 44, &lazy, 4);
+            length = 48; object_offset = 16; object_count = 1; looked_up = 1;
             puts("PARCEL_LOOKUP_REPLY=READY: controlled service Binder object with system stability and lazy metadata.");
         } else if (endpoint && request.code == PARCEL_CODE) {
             require(looked_up && described && request.offsets_size == sizeof(binder_size_t),

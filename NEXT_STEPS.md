@@ -10,83 +10,22 @@ Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: diagnose why the Android client rejected the scoped service
-lookup reply (second Parcel attempt below). Retain the completed native object/FD
-and Android empty-list results; do not rerun them. Do not rerun the Parcel probe
-until the lookup-reply layout is understood; the same command will stop the same way.
-Start with the read-only check below.
+Next action: rerun the Android Parcel probe below with the corrected lookup
+reply. Retain the completed native object/FD and Android empty-list results;
+those probes do not need to be rerun.
 
-## One command: read-only check of the image's service-manager interface
+## Cause found for the rejected lookup reply
 
-No storage is modified; this only reads the extracted runtime from the failed runs.
-Upstream AOSP source is not reachable from the cloud session, so the lookup call
-and reply layout cannot be confirmed there. Run on the M1:
-
-```bash
-cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime && f=$(find . -name libbinder.so | head -1) && echo "$f" && strings -a "$f" | grep -E 'checkService|getService|ServiceWithMetadata|IServiceManager|isDeclared|listServices' | sort -u | head -60
-```
-
-Say **get logs** with the output pasted. It shows which service-manager method
-names the image's libbinder contains, to decide whether code 4 and the Service
-union reply are right. It does not by itself establish the transaction codes.
-
-## One command: read-only disassembly of the Service union decoder
-
-Result of the previous read-only check (`./lib64/libbinder.so` in
-`android-parcel-probe-rxdul6oa`): the image's libbinder contains both
-`checkService` and `checkService2` (and `getService`/`getService2`,
-`checkServiceAccess`, `unregisterForNotifications`). The symbol names confirm
-checkService2 exists; they do not give its transaction code. By upstream method
-order (recalled, not verified against this image) code 4 would be checkService2,
-which matches the observed request, so the likelier fault is the reply layout:
-the `Service` union tag/field order and whether the nested parcelable is sized.
-
-No storage is modified. The first attempt listed the symbols (reported:
-`Service::readFromParcel` at 0x6bec0 and `ServiceWithMetadata::readFromParcel`
-at 0x6c800 in `lib64/libbinder.so`) but the name-based disassembly printed
-nothing, so use addresses. On the M1:
-
-```bash
-cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && objdump -d --no-show-raw-insn --start-address=0x6bec0 --stop-address=0x6c200 libbinder.so 2>&1 | head -260
-```
-
-Say **get logs** with the output. If `objdump` is missing, say so; do not
-install packages for this.
-
-## One command: read-only disassembly of ServiceWithMetadata decoder
-
-Result of the `Service::readFromParcel` disassembly (reported, from
-`lib64/libbinder.so` in `android-parcel-probe-rxdul6oa`): it reads an int32 tag;
-tag 0 calls `Parcel::readParcelable` (the sized `ServiceWithMetadata`), tag 1
-calls `readNullableStrongBinder` directly, any other tag returns -EINVAL (-22).
-This matches the reply's tag 0 and sized parcelable, so the union tag is not the
-fault. The field layout inside `ServiceWithMetadata` is not yet read from the
-image. No storage is modified. On the M1:
-
-```bash
-cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && objdump -d --no-show-raw-insn --start-address=0x6c800 --stop-address=0x6cb00 libbinder.so 2>&1 | head -200
-```
-
-Say **get logs** with the output.
-
-## One command: read-only disassembly of Parcel::readParcelable
-
-Result of the `ServiceWithMetadata::readFromParcel` disassembly (reported):
-it reads an int32 size, rejects size < 4 (-EINVAL), then reads a nullable strong
-binder into the first field and a bool into the second, then skips to
-position+size. This matches the reply's layout (size 36, binder object plus
-stability word, lazy bool), as does the union tag. So the two decoders agree with
-the reply on paper; why the client still reported `does not exist` is not
-explained. Not yet inspected: `Parcel::readParcelable`, which `Service` calls
-before `ServiceWithMetadata` (it may read an extra present/null int32), and the
-client's handling after decode (stability check). No storage is modified. On the M1:
-
-```bash
-cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && a=$(nm -D --defined-only libbinder.so | awk '$3 ~ /^_ZNK7android6Parcel14readParcelableEPNS_10ParcelableE/ {print $1; exit}'); echo "readParcelable=$a"; [ -n "$a" ] && objdump -d --no-show-raw-insn --start-address=0x$a --stop-address=$(printf '0x%x' $((0x$a + 0x140))) libbinder.so 2>&1 | head -120
-```
-
-Say **get logs** with the output. If `readParcelable=` is empty, tell me and
-I will use the `.plt` target from the earlier listing instead.
+Disassembly of `Parcel::readParcelable` in the image's libbinder (reported, at
+0x6c260): it reads an int32 and calls the parcelable's `readFromParcel` only if
+that word is 1; otherwise it returns 0x80000008 (UNEXPECTED_NULL). The probe's
+reply put the sized-parcelable length (36) directly after the union tag, so the
+client read 36, treated the service as null and printed `does not exist`.
+The corrected reply inserts the present word: status 0, tag 0, present 1,
+size 36, binder object (offset 16) plus stability 12, lazy bool; 48 bytes.
+This is a static finding from the image's code; the corrected reply is built
+(compiles) but not yet executed. The earlier read-only inspection steps are
+complete and need no rerun.
 
 ## One command: Android returned object and outgoing FD Parcel
 
@@ -137,7 +76,7 @@ controlled native endpoint with one private service lookup; it is not Android
 servicemanager, service registration or a HAL. The endpoint:
 
 1. Checks the `android.os.IServiceManager` token and the exact `gbos.parcel`
-   lookup name. Its checkService2 reply contains a `Service` union holding a
+   lookup name. Its checkService2 reply contains a `Service` union, a present word of 1 and a
    sized `ServiceWithMetadata` with the Binder object, system stability and
    lazy metadata. These are explicit fixtures for the scoped lookup.
 2. Returns an interface descriptor on the object. It then verifies that the
