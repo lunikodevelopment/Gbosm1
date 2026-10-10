@@ -94,6 +94,11 @@ def enter_root(root):
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         number = {"aarch64": 41, "x86_64": 155}[platform.machine()]
+        # pivot_root changes the whole mount namespace, so this process gets its own copy first;
+        # without it the test script (and its host tools) would lose their root too
+        os.unshare(os.CLONE_NEWNS)
+        if libc.mount(None, b"/", None, 0x4000 | 0x40000, None) != 0:  # MS_REC | MS_PRIVATE
+            raise OSError(ctypes.get_errno(), "make-rprivate")
         os.chdir(root)
         if libc.syscall(number, b".", b".") != 0:
             raise OSError(ctypes.get_errno(), "pivot_root")

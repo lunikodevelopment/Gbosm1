@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5d", below) and paste its output.
+bring-up stage B5e", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -830,21 +830,30 @@ Operationally tested on the M1:
   `ActivityRecognitionHardware`, `VibratorInfo` (no HAL data). They are errors the
   sandbox is expected to produce; none stopped zygote.
 
-## Next action: bring-up stage B5d, zygote enters the tree with pivot_root instead of chroot
+## Results: bring-up stage B5d (`root-smoke-3h8rhhrq`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5c: the
+- **My launcher change broke the test script, not Android.** `pivot_root` changes the
+  whole mount namespace, so the test script (the launcher shared its namespace) lost
+  its own root: afterwards `sleep`, `head`, `grep`, `cut` and `tail` could not be found,
+  and the zygote run produced no output ("STILL RUNNING" with nothing listed is not a
+  result). Only the private test namespace was affected; the host was not.
+- Useful from S2b: the mount table inside the `chroot` shows the tree as a bind mount
+  whose source is the directory `/home/gbos_user/Gbosm1/work/asahi/android-root-7nqprryz/root`
+  of the btrfs `/home` subvolume (read-only). The `readlink` line printed nothing, so
+  the path an open file reports under `chroot` is still unproven.
+
+## Next action: bring-up stage B5e, pivot_root in the launcher's own mount namespace
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5d: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
-or flash change. `pivot_root` acts only inside the private mount namespace of the
-test; the host's root is not touched (the old root is detached with `umount -l`
-inside the namespace).
+or flash change.
 
-What changes: the zygote launcher makes the tree the namespace's own root with the
-`pivot_root` call (falls back to `chroot` and prints that it did), so open files
-should show `/apex/...` and `/system/...` paths as on a device. A new step "S2b"
-also prints what path a file opened inside the plain `chroot` shows, and the first
-lines of the mount table there, so the cause can be read directly.
+What changes: the zygote launcher first moves into its own copy of the mount
+namespace (`unshare(CLONE_NEWNS)`, then `/` made private) and only then calls
+`pivot_root`, so the test script keeps its tools. A local test in a throwaway
+namespace showed the parent still sees `/usr` after the child pivots.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
