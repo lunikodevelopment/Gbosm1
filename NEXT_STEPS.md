@@ -1900,7 +1900,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1 and 2 complete; stage 3a is next
+## Graphics: stages 0, 1, 2 and 3a complete; stage 3b is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -1938,29 +1938,75 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3a, read minigbm's source for an Asahi path
+### Next: Graphics stage 3b, linear buffers without Mesa's GBM
 
-The Android allocator service and mapper still need an implementation. The
-earlier VM port reused Cuttlefish's prebuilt minigbm, which allocates through
-the kernel driver it recognises by name. This step reads minigbm's source, in
-both AOSP's copy and ChromiumOS upstream, to find out whether it already
-recognises `asahi` or `apple`, how it picks a DRM node, whether a generic
-dumb-buffer or Mesa-backed path exists, and how its mapper 5 and allocator
-targets are built. The result decides what stage 3 builds; nothing is assumed
-to work yet.
+Stage 3a (below) found no Asahi or Apple support in minigbm, but it does have a
+plain "dumb buffer" backend selected by DRM driver name. Whether a dumb buffer
+from the display driver (`apple`), or a buffer from a dma-heap, can be used by
+Honeykrisp is untested. This step allocates 256x256 ARGB8888 linear buffers
+those ways, imports each into Honeykrisp as a linear image, and checks both
+directions: CPU write then GPU read, and GPU clear then CPU read through an
+mmap of the dma-buf. It also prints the node permissions and the two minigbm
+source excerpts still needed (read from the stage 3a clone, no network).
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/minigbm-src-*` directory with two shallow git
-clones and `report.txt`. Nothing is built, installed or run from them, and no
-device is opened. Delete the directory to reverse.
+Creates one new `work/asahi/linear-dmabuf-*` directory with the probe binary
+and `report.txt`. Allocates a few 256x256 buffers for the run only (dumb
+buffers on the `apple` and `asahi` card nodes, one per readable dma-heap).
+No modeset and no DRM master are used, so GNOME is unaffected. Delete the
+directory to reverse. It uses the same `vulkan-loader-devel` and
+`libdrm-devel` packages as stage 1.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/inspect-minigbm-source.sh
+bash asahi/run-linear-dmabuf.sh
 ```
 
-Send the printed `report.txt` (attach it if it is long).
+Send the printed `report.txt`. Each case reports its own step (`dumb_create`,
+`prime_export`, `vulkan_import`, `cpu_to_gpu`, `gpu_to_cpu`); a refusal such
+as a permission error on a node is a result, not something to work around.
+The probe compiled here but has not run; Honeykrisp is only on your machine.
+
+### Result: Graphics stage 3a, minigbm source (read, not built)
+
+Reported by the user from `work/asahi/minigbm-src-pinRnTy0`; these are source
+facts, nothing was built or run:
+
+- Sources: AOSP `external/minigbm` at `455b745` (2025-03-26) and ChromiumOS
+  `minigbm` at `a2d42f0` (2026-10-01). Both carry a BSD `LICENSE`, to be kept
+  with anything derived from them. The AOSP copy lacks `dma_heap.c`, which
+  upstream has.
+- Neither tree mentions `asahi` or `apple` anywhere.
+- `drv_get_backend()` picks a backend by exact `drmGetVersion()` name against
+  a fixed list (amdgpu, i915, msm, vc4, xe behind `DRV_*` flags, plus virtgpu,
+  mediatek, rockchip, nouveau, radeon, vkms, and others). No match makes
+  `drv_create()` fail, so an unmodified minigbm would not allocate on this
+  machine.
+- `dumb_driver.c` defines a trivial backend with one line per driver
+  (`INIT_DUMB_DRIVER(name)`); it uses DRM dumb buffers, so it gives linear
+  CPU-mappable buffers and no GPU layouts.
+- `dri.c` is the other route: it `dlopen`s a Mesa DRI driver and uses
+  `__DRI_IMAGE`. Using it for Asahi would need Mesa's gallium `asahi` driver
+  built for Android, which stages 2b-2d did not build (they built Honeykrisp
+  only). Inferred, not checked: stage 1's GBM allocations on Fedora likely went
+  through that gallium driver for the same reason.
+- `cros_gralloc_driver.cc:129-130` enumerates `renderD%d` and `card%d` nodes;
+  the excerpt is printed in stage 3b because the allocation order matters.
+- AOSP builds per-vendor flag sets (intel, meson, msm, arcvm), the AIDL
+  allocator `android.hardware.graphics.allocator-service.minigbm`, the
+  stable-C mapper `mapper.minigbm`, and `libminigbm_gralloc`: the same
+  components the VM port used.
+
+What this leaves open (decided only after stage 3b):
+
+1. Add `asahi` and/or `apple` as dumb-style backends, if stage 3b shows those
+   linear buffers work with Honeykrisp. That is a small patch but gives linear
+   only; tiled and compressed buffers (which stage 1b showed work through
+   GBM) would stay unused.
+2. Write a small allocator on Honeykrisp's own Vulkan allocation with
+   dma-buf export, which keeps tiled layouts and avoids building gallium.
+3. Build gallium `asahi` for Android and use minigbm's DRI path or GBM.
 
 ### Result: Graphics stage 1b, Apple tiled and compressed layouts (passed)
 
