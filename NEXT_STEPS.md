@@ -17,6 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
+Bring-up track (separate thread): run the boot-sequence scan ("Next action:
+boot-sequence scan", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -406,6 +408,97 @@ an Android-built Binder server registering with the real servicemanager (the
 image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
+
+## Plan: from Binder services to Android drawing on the M1 (bring-up thread)
+
+This is a plan, not a result; nothing in it has been built or run except where
+a result is recorded below. It covers what lies between today's results
+(sixteen image services answering over Binder in a private root) and Android
+drawing on the M1 display. ART, apex and zygote evidence is gathered by the
+sections above; graphics (Honeykrisp, GBM buffers, allocator, composer) by the
+Graphics sections below. This plan does not repeat either; it orders them and
+adds the missing middle. SELinux stays enforcing except the temporary
+permissive `gbos_binder_probe_t` domain. Nothing here touches partitions,
+flashing or boot; every run step states its storage scope first.
+
+Open question the scan answers first: run the image's own `init` in the private
+root, or write stand-ins. `init` brings the property service, ueventd, `.rc`
+ordering and `logd` together, but it also expects to be PID 1, loads SELinux
+policy, mounts filesystems and can reboot. A private PID namespace and mount
+namespace contain most of that; the SELinux policy load is the doubtful part
+(it writes `/sys/fs/selinux`, which a user namespace cannot do). Whether `init`
+tolerates this is not known; the scan lists its start modes and its messages
+about SELinux, properties and reboot so the choice rests on evidence.
+
+Stages (each needs the previous stage's evidence; any may end in "not feasible
+without changing the image or Fedora policy", which would be reported):
+
+B0. Read-only boot-sequence scan (below). Reads the main init scripts
+    (`init.rc`, `init.zygote64.rc`, vendor `init.*.rc`), the `late-init` order,
+    the stanzas of logd, lmkd, apexd, servicemanagers and the graphics services,
+    property context and build property sizes, and `init` strings.
+B1. Property service stand-in. Today only `servicemanager.ready` exists as a
+    hand-built, sealed property area. Bionic reads properties from a
+    `/dev/__properties__` directory of area files (one per property context)
+    plus `property_info`, and `setprop`/`init` write them through the
+    `property_service` socket. Build a native stand-in that creates the areas
+    from the image's build props and context files and serves `setprop` on the
+    private `/dev/socket/property_service`. First run: only observe that
+    `getprop` (Toybox/Bionic) reads values back and that servicemanager's two
+    known denials disappear. If B0 shows `init` is usable, this stage is
+    replaced by running `init`'s property service instead.
+B2. `logd` and the log sockets. Start the image's `logd` (sockets `logd`,
+    `logdr`, `logdw` in `/dev/socket`), then run `logcat -d` through it. Needs
+    the audit netlink absent case to be nonfatal; B0 shows the stanza's options.
+B3. Dependency-ordered group start. Extend the existing `--serve-image` group
+    runner with an ordered, readiness-gated list (property service, logd,
+    servicemanager, lmkd, apexd-lite, then HALs), each step waiting for its
+    socket or registered service before the next. Order comes from B0 and the
+    `.rc` scan, not guesswork. Failures are listed together at the end.
+B4. apexes and linker config. Expose the extracted apex payloads at `/apex/*`
+    in the private root and generate `/linkerconfig` (the image has
+    `linkerconfig`) so Bionic resolves libraries as on a device. Depends on the
+    apex payload listing above.
+B5. ART alone: `dalvikvm64` or `app_process64` running a trivial class from the
+    boot classpath (no zygote). Needs B1 and B4. Then zygote with
+    `--start-system-server` only after B5 succeeds.
+B6. system_server to "boot completed" without graphics: the Java system side
+    with the graphics services absent or stubbed. Expect many findings here;
+    they are the main schedule risk.
+B7. Meeting the graphics work. Needs, from the Graphics sections: the stage 3b
+    linear dma-buf result, an Asahi-backed allocator and mapper registered as
+    the HAL services the image declares, and a composer on `apple-drm`. These
+    need real host devices in the private root (render node, DRM master, which
+    GNOME holds), so the display step is the first one that needs a separate
+    approval and probably a VT or a second seat. Property overrides for the
+    first bring-up (`ro.hardware.vulkan`, lowering wide colour, HDR and
+    protected-content flags) are listed in the Graphics sections.
+B8. SurfaceFlinger drawing one frame (bootanimation or a solid colour) on the
+    internal display, composed with Honeykrisp/ANGLE. Not a standalone boot: a
+    standalone boot approach stays a later, separately approved step.
+
+Dependency order at boot, as far as the scans so far show (to be confirmed by
+B0): properties and logd, then servicemanager (done), apexd and linkerconfig,
+vold-less data mounts (stubbed), hwservicemanager and vndservicemanager, the
+graphics allocator and composer HALs, zygote, system_server, SurfaceFlinger.
+
+## Next action: boot-sequence scan (read-only; bring-up thread, stage B0)
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: one new
+`work/asahi/boot-sequence-*` directory in your checkout with a text report, a
+copy of the main init scripts and the printable `init` messages. Filesystem:
+your home filesystem. The image is only read through `dump.erofs`; nothing is
+mounted, unpacked or executed, and no sudo is used. Loss: none. Reversal:
+delete the printed directory.
+
+Why: it decides between running the image's `init` and writing stand-ins, and
+gives the real dependency order for B3.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-boot-sequence.py
+```
+
+Paste the terminal output (it is long; attach it as a file if needed).
 
 ## Next action: ART / apex / zygote scan (read-only)
 
