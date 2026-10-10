@@ -1344,32 +1344,57 @@ own modifier does too. Both passing supports allocating through Mesa's GBM
 around. This does not test Android, Bionic, scanout or fences between
 processes.
 
-### Next after stage 1: Graphics stage 2a, toolchain check for an Android Honeykrisp build
+### Next: Graphics stage 2b, build Mesa's host compilers natively
 
-Can run before or after stage 1. Stage 2 builds Honeykrisp (Mesa's Asahi
-Vulkan driver) for Android so the image's ANGLE can run on it. The proposed
-build host is now this Fedora machine rather than the Mac: Fedora's own mesa
-source package matches the running driver and kernel uAPI exactly, and the
-Asahi driver's build may need host compiler tools (LLVM, SPIR-V translator,
-libclc) that Fedora packages natively. Whether those are needed for this Mesa
-version, and how Fedora configures them, is what this check reads. It is an
-inference until the report confirms it.
+Stage 2a is done (result below). Stage 2b builds, from the exact Fedora mesa
+26.2.4 source, the host tools that an Android cross build needs (`mesa_clc` and
+the precompiled-shader compiler), plus native Honeykrisp as a sanity check. The
+Android cross build itself (stage 2c) is written after this result shows the
+tool names it must point at.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/mesa-toolchain-*` directory and downloads Fedora's
-mesa source RPM (about 40 MB, an estimate) into it; delete the directory to
-reverse. Nothing is installed or built.
+- The `dnf install` line adds Fedora build packages system-wide (roughly
+  1 GB with dependencies, an estimate). `sudo dnf remove` of the same names, or
+  `sudo dnf history undo last` right after, reverses it. It changes no running
+  service, driver or boot setting; the installed Mesa driver is untouched.
+- The build script creates one new `work/asahi/mesa-host-*` directory (source,
+  build tree and tools, roughly 1-2 GB, an estimate) and installs nothing outside
+  it. Delete the directory to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/check-mesa-android-toolchain.sh
+sudo dnf install clang clang-devel llvm-devel lld meson ninja-build python3-mako \
+  bison flex glslang spirv-tools-devel spirv-llvm-translator-devel libclc-devel \
+  libdrm-devel zlib-devel expat-devel
+bash asahi/build-mesa-host-tools.sh
 ```
 
-Send the printed `report.txt`. It lists installed and available build tools,
-any Android NDK found, the mesa SRPM's meson options, and the Asahi and Android
-build requirements in that exact source. The build script for stage 2 will be
-written from it.
+Send the printed `report.txt` (if the build fails, also the end of
+`build/meson-logs/meson-log.txt` in the result directory).
+
+### Result: Graphics stage 2a toolchain check
+
+Reported by the user from `work/asahi/mesa-toolchain-mWVvIK2W` (nothing
+installed or built):
+
+- Running driver `mesa-vulkan-drivers-26.2.4-1.fc44`; kernel
+  `7.1.6-400.asahi.fc44.aarch64+16k`. Fedora's matching source RPM
+  `mesa-26.2.4-1.fc44.src.rpm` downloaded and unpacked (`mesa-26.2.4.tar.xz`
+  plus Rust crates for other drivers).
+- Fedora builds mesa with `-Dllvm=enabled -Dshared-llvm=enabled`,
+  BuildRequires `pkgconfig(libclc)` and sets `-Dandroid-libbacktrace=disabled`.
+- `src/asahi/meson.build` includes `subdir('clc')`, so the Asahi driver needs
+  the OpenCL C compiler path. The source has the options `mesa-clc`,
+  `install-mesa-clc`, `precomp-compiler`, `install-precomp-compiler`,
+  `android-stub`, `android-libbacktrace` and `platform-sdk-version`.
+- Installed: gcc 16.2.1, python3-pyyaml, -packaging, -pycparser. Missing but
+  available: clang/LLVM 22.1.8 (devel), lld, libclc-devel 22.1.8,
+  spirv-llvm-translator-devel 22.1.2, spirv-tools-devel 2026.1, glslang,
+  meson 1.11.2, python3-mako.
+- No Android NDK on the machine. Google ships NDK host tools only for x86_64
+  Linux and macOS, so the cross build will use Fedora's clang with the NDK's
+  target sysroot (inference; stage 2c will test it).
 
 ### Result: Honeykrisp extensions (step 1)
 
