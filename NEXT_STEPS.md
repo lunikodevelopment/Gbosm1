@@ -4,16 +4,35 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: Bionic Toybox execution passed. The private Binder probe built,
-mounted binderfs, allocated a device and reported protocol 8 on 16 KiB pages,
-but stopped at context-manager registration with `Permission denied`.
-No Binder payload exchange has passed.
-Next action: run the revised Binder probe with a temporary, dedicated SELinux
-server domain. The module is removed after the attempt and enforcement remains
-active. Target execution of this revision is pending; additional denials are
-possible and will be retained for review.
+Current status: Bionic Toybox execution and native private Binder echo both passed
+on Fedora Asahi ARM64/16 KiB. The dedicated Binder server domain ran with SELinux
+enforcing; its temporary module was removed and the new executable label restored.
+Qualcomm graphics adaptation remains required.
+Next development action: select a focused Android libbinder integration probe
+using the already extracted Bionic runtime and a separate private Binder context.
+No new user command is required yet; do not repeat the completed echo probe.
 
-## One command: Binder echo with a dedicated server domain
+## Completed Binder echo and cleanup
+
+Retrieved directly from `work/asahi/binder-probe-xwhs2s_3` on the target HTTP server.
+
+| Operation | Result | Scope |
+|---|---|---|
+| Native build and context discovery | Exit 0; device/root label `binderfs_t` | Native Linux probe with target UAPI headers. |
+| Dedicated policy installation and executable labeling | Both exit 0 | Temporary module and newly built executable only. |
+| Binder transaction/reply | `BINDER_ECHO=PASS`; exit 0; protocol 8, pages 16384 | Server verified request; client verified reply between two native Linux processes. |
+| Executable context restoration | Exit 0 | Original `unconfined_u:object_r:user_home_t:s0` restored. |
+| Temporary module removal | Exit 0 | Removal log confirms no `gbos_binder_probe` module at another priority. |
+| Recent AVC search | Exit 1, `<no matches>` | No matching AVCs in the queried recent window; not an exhaustive historical audit. |
+
+This establishes native Binder transaction/reply operation under the dedicated
+development policy. Android libbinder/servicemanager, Binder object/FD transfer,
+HAL execution and graphics integration remain untested. Retain the result
+directory; no manual policy cleanup is needed for this completed run.
+
+## Completed command: dedicated-domain Binder echo
+
+The command below is retained as provenance; it does not need to be rerun.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -186,7 +205,7 @@ User-supplied Fedora output on 10 October 2026 establishes:
 |---|---|---|
 | Running kernel | `7.1.6-400.asahi.fc44.aarch64+16k` | Collector output; installed kernel headers are a separate package. |
 | Runtime page size | 16384 bytes | Confirmed by collector and GPU probe. |
-| Binder IPC / binderfs | Both configured `y`; private binderfs device created, protocol 8 and buffer mapping succeeded | Context-manager registration denied; transactions remain untested. |
+| Binder IPC / binderfs | Native private Binder echo passed with protocol 8 on 16 KiB pages | Dedicated SELinux server domain; request/reply verified, temporary module removed and executable label restored. Android libbinder remains untested. |
 | DMA-BUF / DMA heaps | Configured `y`; system heap node present | Allocation and sharing remain untested. |
 | GPU kernel driver | Asahi module loaded; `renderD128` and `card2` use Asahi | Collector evidence. |
 | Internal display | `apple-drm`, connected eDP, 2560×1600 mode | Enumeration only; Android composition remains untested. |
@@ -221,8 +240,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Run the dedicated-domain Binder probe and review IPC and cleanup results
-   before Android libbinder integration.
+1. Prepare Android libbinder integration against a separate private Binder
+   context, reusing the completed Bionic and native Binder milestones.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
