@@ -11,9 +11,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one diagnostic under "First 5a run result" (it explains the
-`/usr` bind failure; creates and removes one empty temporary directory), then say
-**get logs** or paste its output.
+Next action: rerun the one command under "Run now: real servicemanager first
+run (stage 5a)" (the `/usr` bind is fixed), then say **get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -211,6 +210,17 @@ cd ~/Gbosm1 && findmnt -o TARGET,PROPAGATION,FSTYPE,OPTIONS -T /usr; d=$(mktemp 
 
 If `/usr` is not itself a mount point or is marked unbindable, a bind of a
 mount point (or another approach) is the next change; the output decides.
+
+### Diagnostic result and fix
+
+Reported by the user: `/` is btrfs (`subvol=/root`), and a tmpfs is mounted at
+`/usr/lib/firmware/vendor`, inside `/usr`. In a new user namespace the plain
+`mount --bind /usr` failed (`wrong fs type, bad option ...`, EINVAL) while
+`mount --bind /usr/lib64` succeeded. Likely cause, from my recollection of the
+kernel rule and not verified: a non-recursive bind of a tree that contains a
+mount inherited from the parent namespace is refused. Change: the launcher now
+binds `/usr` recursively (`MS_REC`), which carries that mount along. The next run
+tests this; the cleanup and policy steps are unchanged.
 
 ## Run now: real servicemanager first run (stage 5a)
 

@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
     /* Private root. The Python runner created the directories, the Android
      * fixture files and the lib/lib64/bin symlinks under argv[3]. */
 #define ROOT_PATH(leaf) PATH_JOIN(target, argv[3], leaf)
-    ROOT_PATH("usr"); bind_mount("/usr", target, 0, 1);
+    ROOT_PATH("usr"); bind_mount("/usr", target, MS_REC, 1); /* /usr holds a mount (usr/lib/firmware/vendor); a non-recursive bind of it fails in a user namespace */
     ROOT_PATH("dev"); bind_mount("/dev", target, MS_REC, 1);
     ROOT_PATH("proc");
     if (mount("proc", target, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL)) fail("mount private proc in root");
