@@ -55,8 +55,8 @@ def main():
     print("Namespace id map seen inside (inner outer count):")
     print(probe.stdout.strip() or probe.stderr.strip())
     lines = probe.stdout.split()
-    if probe.returncode or "65536" not in lines:
-        sys.exit("the namespace did not get the 65536-id range; stopping before anything is written")
+    if probe.returncode or "65535" not in lines or "524288" not in lines:
+        sys.exit("the namespace did not get ids 1..65535 from the sub-id range; stopping before anything is written")
     print("THIS STEP MODIFIES STORAGE")
     print("Creates work/asahi/android-root-* with the extracted partitions (roughly 4-10 GiB). The image is only read;")
     print("nothing is executed from the tree. Files are owned by sub-ids, so delete the tree with the command printed at the end.")

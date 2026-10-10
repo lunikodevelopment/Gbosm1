@@ -539,7 +539,7 @@ What this changes in the plan:
   `gbos_user:524288:65536`; `newuidmap`/`newgidmap` have `cap_setuid`/`cap_setgid`
   file capabilities; util-linux 2.41.5 `unshare` supports `--map-auto`. So a
   namespace can have root plus ids 1..65535 (Android's system, logd, graphics
-  users). Whether it actually works is tested at the start of the next step.
+  users). The namespace was then seen to map 0 to your user and ids 1..65535 to the sub-id range (65535 ids, not 65536, because root takes one).
 - `fsck.erofs` 1.9.4 has `--extract` and `--offset`; `erofsfuse` is installed. The
   running kernel does not list `erofs` in `/proc/filesystems`, so a kernel mount
   is out and extraction is the route.
@@ -557,8 +557,7 @@ the script prints at the end (`unshare --user --map-auto --map-root-user rm -rf
 
 Why: ART, `logd`, the property service stand-in and any later `init` try need
 `/system`, `/vendor`, `/product` and `/system_ext` as real directories with
-Android owners. The script first checks that the namespace gets the 65536-id
-range and stops before writing anything if not. It extracts `system_a` as the
+Android owners. The script first checks that the namespace gets ids 1..65535 and stops before writing anything if not. It extracts `system_a` as the
 root and `vendor_a`, `product_a`, `system_ext_a` under it (if the image has a
 symlink at one of those names, it is replaced by a directory in the new tree
 only), then prints top-level listing, sizes, owner counts and a few sample
