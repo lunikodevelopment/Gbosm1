@@ -179,7 +179,7 @@ static void parcel_server(const char *path, int ready) {
             memcpy(response + 16, &object, sizeof(object));
             memcpy(response + 40, &stability, 4); memcpy(response + 44, &lazy, 4);
             length = 48; object_offset = 16; object_count = 1; looked_up = 1;
-            puts("PARCEL_LOOKUP_REPLY=READY: controlled service Binder object with system stability and lazy metadata.");
+            puts("PARCEL_LOOKUP_REPLY=READY: 48-byte reply (status, tag, present, size, binder with stability, lazy) for a controlled service Binder object.");
         } else if (endpoint && request.code == PARCEL_CODE) {
             require(looked_up && described && request.offsets_size == sizeof(binder_size_t),
                     "missing decoded object/descriptor or FD offset");
