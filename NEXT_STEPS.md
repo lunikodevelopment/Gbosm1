@@ -1458,7 +1458,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics stage 0 complete; stage 1 queued
+## Graphics: stages 0 and 2 complete; stage 1 is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -1529,38 +1529,31 @@ own modifier does too. Both passing supports allocating through Mesa's GBM
 around. This does not test Android, Bionic, scanout or fences between
 processes.
 
-### Next: Graphics stage 2d, run Android Honeykrisp under Bionic
+### Result: Graphics stage 2d, Android Honeykrisp under Bionic (passed)
 
-Runs the stage 2c `vulkan.asahi.so` through the image's own Android linker on
-Fedora, as the ordinary user: a small Android probe dlopens the driver directly
-(no Android Vulkan loader, properties, Binder or display), creates a device on
-the Asahi GPU, fills a 4 KiB buffer and reads it back. The probe's logic was
-checked in the cloud against Mesa's software driver (glibc x86_64, readback
-PASS); its Android build and the GPU run are untested.
+Operationally tested, reported by the user from
+`work/asahi/honeykrisp-bionic-a9oqkl_m` (command:
+`python3 asahi/probe-honeykrisp-bionic.py`):
 
-**THIS STEP MODIFIES STORAGE**
+- The Android probe and every library in the closure are ARM64 with 16 KiB
+  load alignment. The closure came from `system_a:/system/lib64` (libhardware,
+  libnativewindow, libui, libbinder, libhidlbase, the graphics common,
+  allocator and mapper HIDL/AIDL interface libraries, and others), plus
+  `libdl_android.so` read from the runtime APEX through its symlink. The
+  stage 2c build supplied libdrm 2.4.133.
+- Under the image's `linker64` with `page_size=16384`: `dlopen` passed, ICD
+  interface version 5 was negotiated, and `vkEnumeratePhysicalDevices` found
+  one device, `Apple M1 (G13G B1)`, API 1.4.354, integrated GPU. Device
+  creation, a GPU buffer fill, fence wait and readback all passed
+  (`readback=PASS words=1024/1024 first=0x47424f53`), exit status 0, giving
+  `HONEYKRISP_BIONIC=PASS`.
+- The linker warned that `/linkerconfig/ld.config.txt` is missing. This is
+  expected outside Android and did not stop the run.
 
-Creates one new `work/asahi/honeykrisp-bionic-*` directory with the built probe,
-copies of the stage 2c driver and libdrm, the completed Bionic runtime, and any
-further system_a libraries the driver needs (read from the image). Delete it to
-reverse. Earlier results and the image are only read.
-
-```bash
-cd ~/Gbosm1 && git pull --ff-only
-python3 asahi/probe-honeykrisp-bionic.py
-```
-
-Send the printed `report.txt`. `HONEYKRISP_BIONIC=PASS` would show the
-Android-built driver submitting GPU work on the 16 KiB kernel. A stop names the
-step (build, a missing system_a library, dlopen, device creation or readback).
-
-First run (reported by the user, `work/asahi/honeykrisp-bionic-4mpimr0k`): the
-probe built with 16 KiB alignment and the dependency closure resolved through
-`libbinder_ndk.so`, then stopped with `not little-endian ELF64 (possibly a
-symlink)`: a `system_a:/system/lib64` entry is a symlink into
-`/apex/com.android.runtime/lib64/bionic/`. The runner now follows such
-symlinks into the image's runtime APEX (logged as `SYMLINK ...`) and stops on
-any other symlink. Rerun the commands above after pulling.
+Limits: the probe dlopened the driver directly, so Android's `libvulkan`, HAL
+loading, properties, AHardwareBuffer, images, ANGLE and display were not
+exercised. The first run stopped earlier on the `libdl_android.so` symlink
+(`work/asahi/honeykrisp-bionic-4mpimr0k`); the runner was fixed in 17b14cc.
 
 ### Result: Graphics stage 2c Android Honeykrisp build
 
