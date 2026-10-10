@@ -39,6 +39,14 @@ say "S0 property area"
 mkdir -p "$ROOT/data/dalvik-cache/arm64" "$ROOT/data/misc" "$ROOT/data/system" "$ROOT/data/user/0" "$ROOT/data/user_de/0" \
   "$ROOT/data/app" "$ROOT/data/anr" "$ROOT/data/tombstones" "$ROOT/data/local/tmp"
 chmod 0771 "$ROOT/data/dalvik-cache" "$ROOT/data/dalvik-cache/arm64"
+# and under /mnt (zygote prepares /mnt/user/<user> for system_server and apps; init.rc makes the parents)
+mkdir -p "$ROOT/mnt/user/0" "$ROOT/mnt/runtime/default" "$ROOT/mnt/runtime/read" "$ROOT/mnt/runtime/write" \
+  "$ROOT/mnt/runtime/full" "$ROOT/mnt/expand" "$ROOT/mnt/installer" "$ROOT/mnt/androidwritable" "$ROOT/mnt/pass_through" \
+  "$ROOT/mnt/media_rw" "$ROOT/mnt/data_mirror"
+chmod 0751 "$ROOT/mnt/user/0"
+echo "/storage in the tree: $(ls -ld "$ROOT/storage" 2>&1)"
+say "S0b every mkdir and symlink of the image's init .rc files, replayed under the tmpfs mounts"
+"$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
 say "S1 linkerconfig first (no logd yet), then logd under the generated config"
 timeout 120 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig 2>&1 | head -n 5

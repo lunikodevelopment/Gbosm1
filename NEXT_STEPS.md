@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5l", below) and paste its output.
+bring-up stage B5m", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -925,18 +925,37 @@ Operationally tested on the M1:
   zygote duplicated its standard output, which the test had pointed at a log file.
   On a device init starts zygote with stdin, stdout and stderr on `/dev/null`.
 
-## Next action: bring-up stage B5l, zygote's standard input and output on /dev/null
+## Results: bring-up stage B5l (reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5k: the
+- **zygote forked system_server** (operationally tested): with standard input and output
+  on `/dev/null` there is no allowlist refusal; zygote finished preload and forked
+  system_server (pid 96), which entered its own mount namespace (`unshare(CLONE_NEWNS)`).
+- **system_server stopped before any binder use:** `Failed to mkdir(/mnt/user/0): No such
+  file or directory`, then `JNI FatalError ... com_android_internal_os_Zygote.cpp:814:
+  fs_prepare_dir failed on /mnt/user/0`. zygote then exited (`Exit zygote because system
+  server (pid 96) has terminated`). On a device init.rc creates `/mnt/user` and its
+  siblings before zygote starts; the test's `/mnt` tmpfs was empty.
+- Not fatal: `sendto /data/system/unsolzygotesocket` ENOENT (no system_server listener
+  yet), `setpriority` EACCES, and capability errors from a helper process (pid 105).
+
+## Next action: bring-up stage B5m, the /mnt directories init creates
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5l: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
-(logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
-printed directory. No sudo, no SELinux module, no binder device, no partition, boot
-or flash change.
+(logs, trace); private tmpfs takes the rest, including the new `/mnt` directories, which
+vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no SELinux
+module, no binder device, no partition, boot or flash change.
 
-What changes: right before starting `app_process64` the launcher points descriptors
-0, 1 and 2 at `/dev/null`, as init does. zygote's messages still arrive in `logcat`
-(the process-output section will show only the launcher's lines). Expected: zygote
-forks system_server, which should then stop at its first binder use.
+What changes: before zygote starts, the test creates `/mnt/user/0`, `/mnt/runtime/*`,
+`/mnt/expand`, `/mnt/installer`, `/mnt/androidwritable`, `/mnt/pass_through`,
+`/mnt/media_rw` and `/mnt/data_mirror` on the `/mnt` tmpfs, and prints whether
+`/storage` exists in the tree. New section S0b (`asahi/replay-init-dirs.py`) then
+replays every `mkdir` and `symlink` from the `on ...` sections of the image's init
+`.rc` files (system, system_ext, product, vendor, odm, apex) under the tmpfs mounts,
+with their modes and owners, so the remaining missing-directory failures surface
+together instead of one run each. Paths outside the tmpfs mounts are only listed, with
+those missing from the tree. Expected: system_server gets past storage setup and
+stops at a later point, likely its first binder or property-service use.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
