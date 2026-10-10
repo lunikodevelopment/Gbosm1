@@ -13,8 +13,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the apex inspection (first section after the stage 8b
-results, below) and paste its output. The ART scan is done (results below).
+Next action: run the apex payload listing (first section after the stage 8b
+results, below) and paste its output. The ART scan and apex inspection are
+done (results below).
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -423,6 +424,31 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-art.py
 ```
 
 Paste the terminal output.
+
+## Next action: apex payload listing (text report only)
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: one new
+`work/asahi/apex-payload-*` directory with a text report. Filesystem: your home
+filesystem. The earlier apex copies are only read; nothing is mounted,
+extracted or run. Loss: none. Reversal: delete the printed directory.
+
+Why: lists the inside of the five erofs payloads and checks for the files ART
+needs (`dalvikvm64`, `dex2oat64`, `libart.so`, `core-oj.jar`, the bionic
+`libc.so`, ICU, tzdata, conscrypt). It decides whether ART can be exposed by
+extracting these payloads into the private root.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-apex-payload.py
+```
+
+Paste the terminal output.
+
+## Results: apex inspection (`apex-scan-widnqe3_`; enumerated, nothing mounted or run)
+
+All five files (runtime 5.3 MB, art 20 MB, i18n 21 MB, tzdata6 1.3 MB,
+conscrypt 3.7 MB) are zips whose `apex_payload.img` is erofs and stored
+uncompressed, so `dump.erofs --offset` can read them in place without a loop
+mount. Not shown: signature validity, or payload contents.
 
 ## Next action: apex inspection (copies five apex files; nothing is run)
 
