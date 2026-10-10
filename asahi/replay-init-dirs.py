@@ -14,7 +14,9 @@ task_profiles.json files, plus <cgroup2 root>/system and /apps (init
 mounts them on a device; libprocessgroup needs them to place system_server). Under the
 test's /sys tmpfs these are plain directories: nothing is grouped or limited.
 
-Usage (as root inside the test's namespace): replay-init-dirs.py TREE_ROOT
+Usage (as root inside the test's namespace): replay-init-dirs.py TREE_ROOT [--perms-under PREFIX]
+With --perms-under it only applies the init chmod/chown lines for existing paths under PREFIX
+(for mounts made later in the run, such as binderfs).
 """
 import json
 import os
@@ -44,8 +46,31 @@ def commands(path):
         if words[0] in ("on", "service", "import"):
             in_action = words[0] == "on"
             continue
-        if in_action and words[0] in ("mkdir", "symlink"):
+        if in_action and words[0] in ("mkdir", "symlink", "chmod", "chown"):
             yield words
+
+
+def replay_permissions(root, prefix):
+    """Apply the image's init `chmod MODE PATH` and `chown OWNER [GROUP] PATH` lines for paths under prefix."""
+    import glob
+    applied = 0
+    for rc in rc_files(root):
+        for words in commands(rc):
+            if words[0] not in ("chmod", "chown") or len(words) < 3 or not words[-1].startswith(prefix):
+                continue
+            for host in glob.glob(str(root / words[-1].lstrip("/"))):
+                try:
+                    if words[0] == "chmod":
+                        os.chmod(host, int(words[1], 8))
+                    else:
+                        uid = ident(root, words[1], "-u")
+                        gid = ident(root, words[2], "-g") if len(words) > 3 else -1
+                        os.chown(host, -1 if uid is None else uid, -1 if gid is None else gid)
+                    applied += 1
+                    print(f"  {rc.relative_to(root)}: {' '.join(words)}")
+                except (OSError, ValueError) as error:
+                    print(f"  FAILED {' '.join(words)}: {error}")
+    print(f"init chmod/chown lines applied under {prefix}: {applied}")
 
 
 resolved = {}
@@ -63,11 +88,16 @@ def ident(root, name, flag):
 
 def main():
     root = Path(sys.argv[1])
+    if len(sys.argv) == 4 and sys.argv[2] == "--perms-under":
+        replay_permissions(root, sys.argv[3])
+        return
     made = links = 0
     expanded, outside, failures, unknown = [], {}, [], set()
     files = rc_files(root)
     for rc in files:
         for words in commands(rc):
+            if words[0] in ("chmod", "chown"):
+                continue
             target = words[1] if words[0] == "mkdir" else words[2] if len(words) > 2 else ""
             if "$" in " ".join(words):
                 expanded.append(" ".join(words))

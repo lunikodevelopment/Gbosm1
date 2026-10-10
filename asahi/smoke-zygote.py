@@ -84,6 +84,12 @@ if [ -n "$SMCTX" ]; then
   if mount -t binder binder "$ROOT/dev/binderfs" 2>&1; then
     "$PY" "$ZYG" --binderfs-devices "$ROOT/dev/binderfs" binder hwbinder vndbinder 2>&1
     for n in binder hwbinder vndbinder; do [ -e "$ROOT/dev/$n" ] || [ -L "$ROOT/dev/$n" ] || ln -s "/dev/binderfs/$n" "$ROOT/dev/$n"; done
+    # binderfs creates its devices 0600 root; init's own chmod lines open them up (B6a: system_server got EACCES)
+    "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" --perms-under /dev/binderfs 2>&1 | cut -c1-200
+    for n in binder hwbinder vndbinder; do
+      [ "$(stat -c %a "$ROOT/dev/binderfs/$n" 2>/dev/null)" = 666 ] || { chmod 0666 "$ROOT/dev/binderfs/$n" && echo "NOTE: no init line set $n to 0666; set it here (Android's ueventd.rc also lists the binder devices as 0666)"; }
+    done
+    ls -l "$ROOT/dev/binderfs" 2>&1 | cut -c1-120
     ls -l "$ROOT/dev/binder" "$ROOT/dev/hwbinder" "$ROOT/dev/vndbinder" 2>&1 | sed "s#$ROOT##" | cut -c1-140
     "$PY" "$ZYG" --launch-servicemanager "$ROOT" "$SMCTX" "$SMENTRY" "${BASEENV[@]}" > "$OUT/servicemanager.out" 2>&1 &
     SMPID=$!
@@ -353,15 +359,25 @@ def remove_binder_policy(out, entry):
     print(f"temporary module removed: {'yes' if removed.returncode == 0 else 'NO, run: sudo semodule -r gbos_binder_probe'}", flush=True)
     audit = subprocess.run(["sudo", "ausearch", "-m", "AVC,USER_AVC", "-ts", "recent", "-i"], capture_output=True, text=True)
     (out / "denials.txt").write_text(audit.stdout)
-    seen = {}
+    enforced, permissive = {}, {}
+    android = re.compile(r'comm="?(system_server|servicemanager|zygote64|app_process64|main|logd|binder:|HwBinder)')
     for line in audit.stdout.splitlines():
-        if "avc:" in line and ("gbos_binder_probe" in line or "tclass=binder" in line):
-            short = re.sub(r"^.*avc:\s+", "", line)
-            short = re.sub(r" pid=\d+| ino=\d+| dev=\S+| path=\S+", "", short)
-            seen[short] = seen.get(short, 0) + 1
-    print(f"--- SELinux denials in the last 10 minutes for the temporary domain or binder ({len(seen)} distinct; all in {out / 'denials.txt'}):")
-    for short, count in list(seen.items())[:25]:
+        if "avc:" not in line or not ("gbos_binder_probe" in line or "tclass=binder" in line or android.search(line)):
+            continue
+        short = re.sub(r"^.*avc:\s+", "", line)
+        short = re.sub(r" pid=\d+| ino=\d+| dev=\S+| path=\S+| name=\S+", "", short)
+        if "permissive=0" in line:
+            enforced[short] = enforced.get(short, 0) + 1
+        else:
+            m = re.search(r"\{ ([^}]*) \}.*tcontext=\S+:(\w+):\S+ tclass=(\w+)", short)
+            key = f"{m[1]} on {m[3]} {m[2]}" if m else short[:120]
+            permissive[key] = permissive.get(key, 0) + 1
+    print(f"--- SELinux denials ENFORCED in the last 10 minutes for Android processes, the temporary domain or binder "
+          f"({len(enforced)} distinct; all audit lines in {out / 'denials.txt'}):")
+    for short, count in list(enforced.items())[:30]:
         print(f"{count:4d} {short[:300]}")
+    print(f"--- logged only (permissive temporary domain), grouped: {len(permissive)} kinds:")
+    print("  " + "; ".join(f"{k} x{n}" for k, n in list(permissive.items())[:30]))
 
 
 def main():

@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6a", below) and paste its output.
+bring-up stage B6b", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1001,7 +1001,25 @@ Operationally tested on the M1:
 - The property-service stand-in ran; the only request received was `logd.ready=true`
   (from logd). system_server stopped before setting any property.
 
-## Next action: bring-up stage B6a, Binder and the real servicemanager in the zygote sandbox
+## Results: bring-up stage B6a (`root-smoke-6he1ccnd`; reported by the user)
+
+- **The temporary module worked as designed** (operationally tested): installed, the
+  servicemanager copy labelled, and removed at the end (`temporary module removed: yes`).
+- **The image's servicemanager runs in the zygote sandbox** in
+  `unconfined_u:unconfined_r:gbos_binder_probe_t:s0-s0:c0.c1023`, and it set
+  `servicemanager.ready=true` through the property-service stand-in (the first
+  property set from an Android service other than logd).
+- binderfs already contained `binder`, `hwbinder` and `vndbinder` at mount (the kernel's
+  default device list), so the `BINDER_CTL_ADD` calls reported "File exists"; the
+  `/dev/binder` links pointed at them.
+- **Stop:** system_server: `Binder driver '/dev/binder' could not be opened. Error: 13
+  (Permission denied)`. binderfs creates its devices mode 0600 for root, while
+  system_server runs as uid 1000; on a device init's `chmod 0666` lines open them up.
+  The printed denials (first 25 of 66) were all logged-only lines from the permissive
+  servicemanager domain, so whether SELinux also refused the open is not shown;
+  the denial summary is reworked below.
+
+## Next action: bring-up stage B6b, Binder device permissions
 
 Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
 October 2026).
@@ -1023,6 +1041,13 @@ Possible loss: none. Reversal: the run deletes the labelled copy and runs `sudo 
 was interrupted, run `sudo semodule -r gbos_binder_probe`, then delete the printed
 directory. No partition, boot, flash or enforcement change; no host device beyond the
 private binderfs.
+
+What changes from B6a: after mounting binderfs the run applies the image's own init
+`chmod`/`chown` lines for `/dev/binderfs` (new `--perms-under` mode of
+`asahi/replay-init-dirs.py`; it falls back to 0666 with a note if no line matches), and
+lists the devices. The denial summary now prints every enforced denial for the Android
+processes, the temporary domain or binder in full, and groups the logged-only ones.
+Same approval, scope, loss and reversal as B6a.
 
 What happens: as in B5p, plus S1b: binderfs mounted at `/dev/binderfs` in the tree with
 devices `binder`, `hwbinder` and `vndbinder` (linked from `/dev/binder` etc.), then the
