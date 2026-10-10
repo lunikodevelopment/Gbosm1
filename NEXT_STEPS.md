@@ -2202,7 +2202,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3h complete; stage 3i (AOSP sources) is next
+## Graphics: stages 0, 1, 2 and 3a-3i complete; stage 3j (build aidl) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2240,38 +2240,64 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3i, fetch the AOSP sources and size the `aidl` build
+### Next: Graphics stage 3j, build AOSP's `aidl` natively and generate the allocator code
 
-Stage 3h (below) found no prebuilt donors, so the service and mapper have to be
-built from source, and that needs AOSP's `aidl` compiler to generate the C++
-(NDK backend) code for the allocator and graphics-common types, which the
-mapper also uses. This step fetches only the AOSP pieces involved, with sparse
-shallow clones from `android.googlesource.com` (`system/tools/aidl`,
-`system/libbase`, `hardware/interfaces` graphics and common, `frameworks/native`
-Binder NDK, `system/core` and `system/logging` headers, `hardware/libhardware`
-headers), on the `android16-release` branch if it exists, else `android15-release`,
-else `main`. It then prints what building `aidl` natively on Fedora would
-depend on: its source and library list, whether `bison`, `flex` and the usual
-development packages are installed, the AIDL files for the allocator and common
-types and the frozen allocator versions, the stable-C mapper headers, and the
-Binder NDK C++ headers the NDK sysroot lacks. It builds and runs nothing.
+Stage 3i (below) showed `aidl` is a small, self-contained C++ program, so this
+step builds it without Soong: Fedora clang++ compiles the `libaidl-common`
+sources plus `main.cpp`, the lexer and parser come from `flex` and `bison`
+(both installed), and the needed `libbase` files are compiled alongside. It
+then runs the fresh `aidl` with `--lang=ndk --structured --stability=vintf`
+over the frozen allocator V2 snapshot and the graphics-common and
+`android.hardware.common` snapshots (imports resolved from those trees, version
+and hash taken from each snapshot's `.hash`), writing the C++ NDK-backend
+headers and sources the service and mapper include. Nothing in the allocator
+service or mapper is compiled yet. I have not been able to compile any of this
+here (AOSP sources are fetched only on your machine), so compile errors in the
+first run are likely; the report lists each failing unit with its first error
+lines, and I will fix them from that.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/aosp-gralloc-src-*` directory with those clones
-(a few hundred MB at most, an estimate; the report prints the real size) and
-`report.txt`. Nothing is built, installed or run from them. Delete the
-directory to reverse. The AOSP sources are Apache-2.0 licensed; anything built
-from them keeps their notices and the report records the commits used.
+Creates one new `work/asahi/aidl-build-*` directory: object files, the built
+`aidl` binary, the generated code and `report.txt`. The stage 3i sources are
+only read. Delete the directory to reverse. Nothing is installed or downloaded.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/fetch-aosp-gralloc-sources.sh
+bash asahi/build-aidl-host.sh
 ```
 
-Send the printed `report.txt` (attach it; it is long). Alternative if building
-`aidl` natively turns out too deep: run the x86_64 `aidl` from the Android SDK
-build-tools under FEX, which Fedora Asahi packages. Not assessed yet.
+Send the printed `report.txt`.
+
+### Result: Graphics stage 3i, AOSP sources (fetched, not built)
+
+Reported by the user from `work/asahi/aosp-gralloc-src-7v8iHsYf` (37 MB in
+total, branch `android16-release`, all Apache-2.0 AOSP sources):
+
+- Commits: `system/tools/aidl` `5bde6fc` (2025-03-20), `system/libbase`
+  `0ac7ea4` (2025-03-24), `hardware/interfaces` `5688f7e` (2025-04-22),
+  `frameworks/native` `2827a4a` (2025-04-18), `system/core` `68be0c2`,
+  `hardware/libhardware` `cd2b68d`, `system/logging` `d78b713`.
+- `aidl` is `libaidl-common` (about 35 C++ files plus a flex lexer and a bison
+  grammar) and `main.cpp`. Its non-test sources include only
+  `android-base/{strings,stringprintf,result,parseint,parsedouble,file,scopeguard,logging}.h`
+  and `aidl/transaction_ids.h`; `gtest` and `gmock` appear only in tests.
+  Soong lists `libbase` and `liblog` as static dependencies. `libbase`'s
+  listed sources are small (`file`, `strings`, `logging`, `stringprintf`,
+  `result`, `hex`, `process`, `properties`, `threads` and a few more).
+- Host tools: `gcc`, `g++`, `bison`, `flex`, `make`, `ninja`, `meson` are
+  installed; `cmake`, `jsoncpp-devel`, `libxml2-devel`, `protobuf-devel` and
+  `gtest-devel` are not, and nothing in the non-test includes needs them.
+- Frozen allocator versions present: `1`, `2`, `current`. The AIDL files for
+  `android.hardware.graphics.allocator` and `...common` (including `NativeHandle`
+  through `android.hardware.common`) are in `hardware/interfaces`.
+- Stable-C mapper headers are there: `android/hardware/graphics/mapper/IMapper.h`
+  and `utils/IMapperMetadataTypes.h`, `utils/IMapperProvider.h`.
+- The Binder NDK C++ headers the sysroot lacked are there:
+  `include_cpp/android/binder_auto_utils.h`, `binder_interface_utils.h`,
+  `binder_parcel_utils.h`, `binder_parcelable_utils.h`, `binder_enums.h`,
+  `binder_to_string.h`, and `include_platform/android/binder_manager.h`,
+  `binder_process.h`, `binder_ibinder_platform.h`.
 
 ### Result: Graphics stage 3h, prebuilt minigbm donors (none present)
 
