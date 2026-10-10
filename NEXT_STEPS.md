@@ -8,11 +8,13 @@ Current status: Bionic Toybox execution and native private Binder echo both pass
 on Fedora Asahi ARM64/16 KiB. The dedicated Binder server domain ran with SELinux
 enforcing; its temporary module was removed and the new executable label restored.
 Qualcomm graphics adaptation remains required.
-Next action: run the corrected client-tracing probe. Descendant cleanup and
-trace collection are implemented; target execution and the cause of the client
-wait are still pending. This command supersedes the previous untraced attempt.
+Next action: run the libbinder probe with its private readiness property fixture.
+The retrieved trace identifies the wait for `servicemanager.ready` before Binder
+traffic. The fixture is implemented; target execution of this revision remains
+pending. Descendant cleanup and temporary policy/label cleanup succeeded in the
+latest traced attempt.
 
-## One command: corrected libbinder diagnostics
+## One command: libbinder with private stub readiness
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -23,6 +25,14 @@ the root filesystem and RPM database. The probe creates a new
 report and logs. It reuses the already prepared runtime from the previous
 attempt and rechecks copied ELF files; source images and earlier reports remain
 retained. Existing per-file/library size limits remain in force.
+
+Inside the existing private tmpfs `/dev`, this revision creates a 128 KiB
+read-only binary property area at `/dev/__properties__`. It contains only
+`servicemanager.ready=true`, published after the native stub's readiness
+handshake. It uses Bionic's supported single-file `ContextsPreSplit` format;
+the image's Android property API and client binaries are unchanged. The file
+disappears when the private mount namespace exits. It represents readiness of
+this minimal stub, not readiness of a full Android service manager or boot.
 
 As before, the runner temporarily installs the dedicated SELinux server module
 and labels only the new native stub executable, affecting the policy store and
@@ -56,9 +66,10 @@ is not traced and gains no ptrace permission. `LD_LIBRARY_PATH` is passed to the
 Android tracee with strace's `-E`, so the host tracer uses its native libraries.
 The full trace is `android-runtime/client.trace`, and its last 100 lines are
 copied into `client-trace-tail.txt` and `report.txt`, including on failure.
-The trace can identify Binder opens/ioctls, property-file lookups, futex waits,
-retry sleeps or other startup activity. Its contents will guide the next fix;
-the missing linker configuration warning is not treated as the cause by itself.
+The next trace should show Bionic opening/mapping the private property file,
+then opening `/dev/binder` and issuing Binder ioctls. A layout incompatibility,
+access denial or a further dependency failure still stops with retained logs.
+The missing linker configuration warning is not treated as the cause by itself.
 
 The private `/dev/binder` alias, tmpfs /dev overlay and proc mount are visible
 only inside the probe's namespaces. No Android system files or device aliases
@@ -77,7 +88,44 @@ client trace from the HTTP directory listing. A diagnostic run may still stop;
 passing libbinder IPC will be claimed only when the verified stub reply, Android
 client output, exit status and cleanup results establish it.
 
-## Retrieved libbinder attempt: incomplete
+The expected evidence is `STUB_READY_PROPERTY=CREATED`, a verified
+`ANDROID_PARCEL` list request, `LIBBINDER_STUB_REPLY=PASS`, Android's
+`Found 0 services:`, `LIBBINDER_LIST=PASS`, exit 0 and cleanup return codes 0.
+Property-file creation alone is not a pass. Even a pass demonstrates only this
+empty-list exchange. Full Android property service, split property contexts,
+Binder object/FD transfer, real servicemanager, HALs and graphics remain later
+milestones.
+
+Implementation reference: Bionic revision
+`731631f300090436d7f5df80d50b6275c8c60a93`, `SystemProperties::InitContexts`,
+`prop_area::map_fd_ro`, `prop_trie_node` and `prop_info`. The area has magic
+`0x504f5250`, version `0xfc6ed0ab`, a 128-byte header, relative trie offsets,
+and a clean value serial. Its owner/group are verified as root inside the user
+namespace and its final mode is 0444. Compatibility with the extracted Android
+17 Bionic is established only by the next target run.
+
+## Retrieved traced libbinder attempt: readiness wait
+
+Results: `/home/gbos_user/Gbosm1/work/asahi/libbinder-probe-yvdq9dbs`.
+
+| Operation | Result | Scope |
+|---|---|---|
+| Runtime reuse and native build | 14 ARM64/16 KiB ELF files; build exit 0 | Prepared dependencies reused and inspected. |
+| Previous failed client cleanup | PID 3536 terminated by pidfd after exact identity checks | Removed the saved failed attempt's surviving Android client. |
+| Client execution | Exit 124; launcher/server alarms recorded | No list request or reply established. |
+| Client trace | `/dev/__properties__` stat/open returned ENOENT; repeated `Waited for servicemanager.ready...` | Android reached the service-manager readiness gate. No `/dev/binder` open appears in the captured trace. |
+| Executable label restoration | Exit 0 | Original new-stub context restored. |
+| Temporary policy removal | Exit 0 | Scoped module removed. |
+
+The upstream `BackendUnifiedServiceManager::getBackendUnifiedServiceManager`
+waits for `servicemanager.ready=true` before obtaining the Binder context
+object. In this isolated probe no Android init/property service supplies that
+property. The new fixture supplies the one readiness fact after the stub has
+registered its context manager and entered its looper. It does not fabricate
+service-list output or a Binder reply; those still have to come from the client
+and the verified native transaction path.
+
+## Earlier untraced libbinder attempt: incomplete
 
 Results: `/home/gbos_user/Gbosm1/work/asahi/libbinder-probe-gx0g75qh`.
 
@@ -95,14 +143,14 @@ The private /dev overlay was established and the Android linker started.
 Its missing generated linker-configuration warning was already nonfatal for
 Toybox; this output does not identify it as the cause of this wait. The stub
 readiness handshake preceded launching the client, but no request was logged.
-Syscall tracing of the Android client is needed before changing its environment,
-properties, namespace configuration or SELinux policy.
+The subsequent traced run above identified the readiness-property wait.
 
-The existing runner kills a process group on a Python timeout, but a launcher
+The earlier runner killed a process group on a Python timeout, but a launcher
 that exits from its own alarm can leave descendants running. Policy/label
 cleanup succeeded; this report does not prove every descendant exited or every
-private mount namespace was released. This defect is corrected in the current runner; it also checks the recorded
-failed clients before the next run. Target verification is pending.
+private mount namespace was released. The current runner corrected this defect;
+the traced run above removed the recorded surviving client and retained its
+cleanup identity in the summary.
 
 ## Previous command: Android libbinder list request
 
@@ -397,8 +445,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Retrieve the corrected run's client syscall trace and cleanup results, then
-   resolve the observed startup wait before claiming libbinder success.
+1. Run the probe with the private readiness fixture, retrieve its client trace
+   and cleanup results, and establish the Android list request/reply milestone.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
