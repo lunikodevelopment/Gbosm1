@@ -11,8 +11,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: waiting for the user's go-ahead to build stage 5a (the real
-servicemanager first run, described in the design section). No command is queued.
+Next action: run the one command under "Run now: real servicemanager first
+run (stage 5a)" below, then say **get logs**. It starts only the image's own
+`servicemanager`, no client.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -188,10 +189,73 @@ Not yet built or run; this is the plan for stages 4-5.
   check. If the first run shows denials, the existing temporary-module pattern
   with an explicit scope statement is the only tool used.
 
-Before building 5a the user's go-ahead is requested: it adds a new native
-launcher and a new probe mode, and each run modifies storage the same way
-earlier probes did (new result directory, temporary policy module and label,
-restored afterward).
+Stage 5a is now built (go-ahead given); its command is under "Run now" above.
+
+## Run now: real servicemanager first run (stage 5a)
+
+**THIS STEP MODIFIES STORAGE**
+
+Scope: the git update changes source in `~/Gbosm1`. The runner creates one new
+`work/asahi/real-servicemanager-*` directory holding copied Android files from
+the recovery image (the `servicemanager` binary and its libraries, each under
+the existing 64 MiB limit, at most 96 libraries), small fixture files (VINTF
+manifests and `*service_contexts`, each under 8 MiB, from `system_a` and
+`vendor_a`), a native launcher, generated policy, syscall trace and reports.
+The image is only read. Nothing is written outside the new directory except
+the temporary SELinux module and one file label described next.
+
+Affected filesystem: the working tree on your Fedora root filesystem, plus the
+active SELinux policy store while the module is installed. It temporarily
+installs `gbos_binder_probe` and labels only the new launcher executable inside
+the new directory; the runner restores that label and removes the module
+afterwards, refuses to run if the module already exists, and keeps SELinux
+enforcing. Compared with earlier probes, this run's module also lets the
+dedicated domain execute the extracted Android files and read the copied
+fixtures, `/proc`, the private `/dev`, and the SELinux filesystem access check
+(`compute_av`) for its own checks. No other domain gains anything.
+
+Processes and mounts: in new user, mount and PID namespaces the launcher
+mounts binderfs, the same private `/dev` overlay as earlier, and builds a
+private root (`sm-root`) with bind mounts of `/usr`, `/dev`, the run's runtime
+directory and `/sys/fs/selinux`, plus a fresh `/proc`. It then `chroot`s into it
+under `strace`, starts `servicemanager` in the dedicated domain, watches it for
+six seconds, and stops it. Mounts vanish with the namespace; Fedora's real
+`/dev`, `/usr` and boot setup are untouched. No partitioning, formatting,
+flashing or boot change.
+
+Possible loss: none of your files; a new result directory and, if cleanup is
+interrupted, a leftover module/label.
+
+Reversal: confirm both cleanup codes in the summary are 0. If interrupted, follow
+the cleanup instructions under "Completed command: dedicated-domain Binder
+echo" (`sudo semodule -r gbos_binder_probe`, after restoring the launcher label
+recorded in the summary; in this mode the launcher is `android-runtime/binder-echo`
+inside the new result directory). Delete only the new printed result directory to
+remove generated files.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager
+```
+
+What to expect, stated as a plan and not a result: the run prints each
+fixture it copied (`FIXTURE ...`), `SERVICEMANAGER_ROOT=READY`, then
+`SERVICEMANAGER_OBSERVED=` with either "still running after six seconds" or the
+exit status/signal. The runner also prints the `CONTEXT_MGR` lines from the
+trace; a `= 0` return from `BINDER_SET_CONTEXT_MGR` would mean it became
+context manager. Any of these are valid outcomes: running, a clean refusal
+naming a missing piece, a crash, an SELinux denial in the AVC query, or an
+unresolved library. A policy-install error would stop before anything runs. I
+do not know which; the run decides. Exit 0 means the observation completed, not
+that servicemanager works. If it stops on a denial or a missing piece, I will
+add exactly that to the next revision instead of widening anything blindly.
+
+Provenance: the launcher and extraction code are original to this project.
+Behavior descriptions of `servicemanager` come from AOSP `cmds/servicemanager`
+as general background and from this image's own binary; no image file is
+modified and no API is intercepted. Not yet built on the target: this code was
+only compile-checked on the cloud machine, which cannot run it.
+
+After it finishes, say **get logs**.
 
 ## Completed inspection: the image's servicemanager (read-only)
 

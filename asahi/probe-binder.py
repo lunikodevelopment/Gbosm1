@@ -29,7 +29,10 @@ def main():
                       help='verify native Binder object calls and a sealed memfd round trip')
     mode.add_argument('--android-parcel', action='store_true',
                       help='run image service call against a controlled object/FD Parcel endpoint')
+    mode.add_argument('--real-servicemanager', action='store_true',
+                      help="start only the image's own servicemanager in a private root and record what happens")
     args = parser.parse_args()
+    sm_mode = args.real_servicemanager
     android_mode = args.android_service or args.android_parcel
     if not args.temporary_policy:
         parser.error('this revision requires --temporary-policy; see NEXT_STEPS.md for scope and reversal')
@@ -38,7 +41,7 @@ def main():
     if platform.system() != 'Linux' or platform.machine() not in ('aarch64', 'arm64') or os.sysconf('SC_PAGE_SIZE') != 16384:
         sys.exit('Requires the Fedora Asahi ARM64/16 KiB target.')
     required = ['cc', 'unshare', 'runcon', 'sudo', 'semodule', 'chcon', 'ldd']
-    if android_mode:
+    if android_mode or sm_mode:
         required.extend(['dump.erofs', 'strace'])
     for tool in required:
         if not shutil.which(tool):
@@ -57,12 +60,12 @@ def main():
     print('If interrupted during cleanup: sudo semodule -r gbos_binder_probe; see NEXT_STEPS.md.', flush=True)
     print('Existing files are retained. Delete the new result directory to reverse generated files.', flush=True)
     parent.mkdir(parents=True, exist_ok=True)
-    prefix = ('android-parcel-probe-' if args.android_parcel else 'libbinder-probe-' if args.android_service
+    prefix = ('real-servicemanager-' if sm_mode else 'android-parcel-probe-' if args.android_parcel else 'libbinder-probe-' if args.android_service
               else 'binder-transfer-probe-' if args.object_fd else 'binder-probe-')
     out = Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
     mountpoint = out / 'binderfs'
     mountpoint.mkdir()
-    source_name = ('probe-android-parcel.c' if args.android_parcel else 'probe-libbinder.c' if args.android_service
+    source_name = ('probe-servicemanager.c' if sm_mode else 'probe-android-parcel.c' if args.android_parcel else 'probe-libbinder.c' if args.android_service
                    else 'probe-binder-transfer.c' if args.object_fd else 'probe-binder.c')
     source = Path(__file__).with_name(source_name).resolve()
     binary = out / 'binder-echo'
@@ -175,6 +178,16 @@ def main():
         return data
     try:
         log(f'Results: {out}')
+        if sm_mode:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('sm_extract', Path(__file__).with_name('prepare-servicemanager.py'))
+            extraction = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(extraction)
+            result['android_runtime'] = extraction.prepare(out, log)
+            binary = Path(result['android_runtime']['runtime']) / 'binder-echo'
+            result['limitations'] = ['Only the image servicemanager is started, for six seconds, without a client: no service list, registration or HAL.',
+                                    'Fixtures are copied VINTF and service-context files; odm/product/system_ext copies, the property service and logd are absent.',
+                                    'An exit, crash or SELinux denial is a result to report, not a defect to hide; exit 0 means the observation completed.']
         if args.object_fd:
             result['limitations'] = ['Native Linux Binder UAPI object/FD prerequisite only; no Android executable is run in this mode.',
                                     'One sealed memfd and one returned Binder object; DMA-BUF, fences, death notifications, full object lifetimes, servicemanager and HALs remain untested.']
@@ -278,6 +291,47 @@ def main():
                       f'(allow gbos_binder_probe_t {memfd_type} (file (read getattr map)))']
             # The template already allows gbos_binder_probe_t unconfined_t
             # fd(use), covering this received file's creator SID.
+        if sm_mode:
+            # Android runtime and fixture files share the run directory's type; nothing is
+            # added for the host. Execute-without-transition is needed to run linker64.
+            tree_types = set()
+            for base in (Path(result['android_runtime']['runtime']), Path(result['android_runtime']['root'])):
+                for path in [base, *base.rglob('*')]:
+                    if path.is_symlink():
+                        symlink_types.add(type_of(os.getxattr(path, 'security.selinux', follow_symlinks=False).decode().rstrip('\0')))
+                    elif path.is_dir():
+                        directory_types.add(type_of(file_context(path)))
+                    else:
+                        tree_types.add(type_of(file_context(path)))
+            optional = {}
+            for key, probe in (('proc', '/proc'), ('selinuxfs', '/sys/fs/selinux/access'), ('selinuxfs_dir', '/sys/fs/selinux'),
+                               ('null', '/dev/null'), ('devdir', '/dev/shm')):
+                try:
+                    optional[key] = type_of(file_context(probe))
+                except OSError:
+                    optional[key] = None
+            result['sm_policy_types'] = {'tree': sorted(tree_types), **optional}
+            rules += [f'(allow gbos_binder_probe_t {t} (file (read open execute execute_no_trans map getattr)))' for t in sorted(tree_types)]
+            rules += [f'(allow gbos_binder_probe_t {t} (dir (read open search getattr)))' for t in sorted(directory_types)]
+            rules += [f'(allow gbos_binder_probe_t {t} (lnk_file (read getattr)))' for t in sorted(symlink_types)]
+            rules += ['(allow gbos_binder_probe_t gbos_binder_probe_t (process (fork sigchld signal sigkill getsched setsched setpgid getattr setrlimit)))',
+                      '(allow gbos_binder_probe_t gbos_binder_probe_t (file (read write open getattr map)))',
+                      '(allow gbos_binder_probe_t gbos_binder_probe_t (dir (search getattr read open)))',
+                      '(allow gbos_binder_probe_t gbos_binder_probe_t (lnk_file (read getattr)))',
+                      '(allow gbos_binder_probe_t gbos_binder_probe_t (unix_stream_socket (create getattr setopt getopt read write connect)))',
+                      '(allow gbos_binder_probe_t gbos_binder_probe_t (unix_dgram_socket (create getattr setopt getopt read write connect)))']
+            if optional['proc']:
+                rules += [f'(allow gbos_binder_probe_t {optional["proc"]} (dir (search getattr read open)))',
+                          f'(allow gbos_binder_probe_t {optional["proc"]} (file (read open getattr)))']
+            if optional['selinuxfs']:
+                rules += [f'(allow gbos_binder_probe_t {optional["selinuxfs"]} (file (read write open getattr map)))',
+                          f'(allow gbos_binder_probe_t {optional["selinuxfs"]} (security (compute_av)))']
+            if optional['selinuxfs_dir']:
+                rules += [f'(allow gbos_binder_probe_t {optional["selinuxfs_dir"]} (dir (search getattr)))']
+            if optional['null']:
+                rules += [f'(allow gbos_binder_probe_t {optional["null"]} (chr_file (open read write getattr ioctl)))']
+            if optional['devdir']:
+                rules += [f'(allow gbos_binder_probe_t {optional["devdir"]} (dir (search getattr)))']
         policy = out / 'gbos_binder_probe.cil'
         policy.write_text(template + '\n'.join(rules) + '\n')
         result['policy'] = {'device_type': device_type, 'library_types': sorted(library_types),
@@ -305,9 +359,11 @@ def main():
                    '--fork', '--kill-child', str(binary), str(mountpoint)]
         if android_mode:
             command.append(result['android_runtime']['runtime'])
-        result['execution'] = run(command, 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
+        if sm_mode:
+            command.extend([result['android_runtime']['runtime'], result['android_runtime']['root']])
+        result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
                                   else 'transfer' if args.object_fd else 'echo', 40)
-        marker = ('ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
+        marker = ('SM_LAUNCHER=DONE' if sm_mode else 'ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
                   else 'BINDER_TRANSFER=PASS' if args.object_fd else 'BINDER_ECHO=PASS')
         output = result['execution']['stdout']
         if result['execution']['returncode']:
@@ -340,6 +396,17 @@ def main():
             result['missing_markers'] = missing
             if missing or not receipt:
                 raise RuntimeError('Android Parcel markers or printed receipt missing: ' + ', '.join(missing))
+        if sm_mode:
+            sm_trace = Path(result['android_runtime']['runtime']) / 'sm.trace'
+            observed = re.search(r'^SERVICEMANAGER_OBSERVED=([^\n]+)', output, re.M)
+            result['servicemanager'] = {'observed': observed[1] if observed else None, 'trace': str(sm_trace),
+                                        'context_manager_lines': [], 'hint': 'the traced ioctl return values decide whether it became context manager'}
+            if sm_trace.is_file():
+                with sm_trace.open(errors='replace') as stream:
+                    result['servicemanager']['context_manager_lines'] = [l.rstrip() for l in stream if 'CONTEXT_MGR' in l][:10]
+            for item in result['servicemanager']['context_manager_lines']:
+                log('TRACE ' + item)
+            log('SERVICEMANAGER_OBSERVED=' + str(result['servicemanager']['observed']))
         if args.object_fd:
             actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
             if not actual or type_of(actual[1]) != memfd_type:
@@ -365,9 +432,9 @@ def main():
         result['error'] = f'{type(error).__name__}: {error}'
         log('STOPPED: ' + result['error'])
     finally:
-        if android_mode:
+        if android_mode or sm_mode:
             try:
-                trace = out / 'android-runtime' / 'client.trace'
+                trace = out / 'android-runtime' / ('sm.trace' if sm_mode else 'client.trace')
                 if trace.is_file():
                     result['client_trace'] = str(trace)
                     with trace.open(errors='replace') as stream:
