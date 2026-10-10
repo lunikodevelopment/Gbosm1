@@ -1091,30 +1091,50 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics stage 0: display step still to run (steps 1 and 3 done)
+## Graphics stage 0: complete (read-only evidence)
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
 allocator/mapper, AOSP drm_hwcomposer on `apple-drm`). This is a plan, not a
 result; nothing in it has been built. Independent of the Binder steps above.
 
-### Remaining: display planes, formats and modifiers (read-only)
+### Result: display planes, formats and fences (step 2)
 
-The first attempt stopped because `drm_info` is not installed. Installing the
-package is the only change; `drm_info` itself reads and sets no mode.
+Reported by the user from `drm_info` 2.10.0 run as the ordinary user
+(enumerated; no mode set and nothing committed). `drm_info` was installed with
+dnf for this step.
 
-```bash
-sudo dnf install drm_info
-drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
-# If it reports permission denied on card2, rerun read-only with sudo:
-# sudo drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
-```
+- Display node: `/dev/dri/card3`, driver `apple` (Apple display controller)
+  1.0.0, platform `apple,display-subsystem`, primary node only. GPU node:
+  `/dev/dri/card1`, driver `asahi` (Apple AGX, `apple,agx-t8103`), primary and
+  render nodes. `/dev/dri/card2` was permission denied and is unidentified.
+  The earlier baseline recorded Asahi on `card2`, so card numbering is not
+  stable across boots; scripts must select nodes by driver name, not number.
+- Display caps: atomic and universal planes supported, `DRM_CAP_PRIME=3`
+  (import and export), `ADDFB2_MODIFIERS=1`, dumb buffers, syncobj and
+  timeline syncobj; no async page flip.
+- One eDP connector, connected, 286x179 mm, one mode 2560x1600@60. One CRTC
+  with `OUT_FENCE_PTR`, `CTM` and `VRR_ENABLED`; gamma size 0.
+- Primary plane (zpos 0): `IN_FENCE_FD`; `IN_FORMATS` lists only
+  `DRM_FORMAT_MOD_LINEAR`, with XRGB/ARGB/XBGR/ABGR8888, XRGB/ARGB2101010,
+  NV12, NV16, NV24, P010 and P210. GNOME currently scans out a linear
+  XRGB8888 2560x1600 framebuffer, pitch 10240.
+- One overlay plane (zpos 1): `IN_FENCE_FD`, linear only, alpha and YUV
+  formats only (no XRGB8888). No cursor plane.
 
-Send `/tmp/drm_info.txt` (it contains device and display details; review
-before sharing publicly). It shows which formats and modifiers the `apple-drm`
-primary plane accepts, whether it is atomic, and whether overlay planes and
-`IN_FENCE_FD`/`OUT_FENCE_PTR` exist. Until then the plan assumes linear
-XRGB8888 on one plane.
+Effect on the plan: the display gate passes. Scanout buffers must be linear,
+so the allocator must return linear layouts for composer and scanout usage
+while GPU-only buffers may keep Asahi's tiled modifiers. In and out fences exist
+for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
+been committed to the display; Stage 5 still needs DRM master, which GNOME
+holds.
+
+### Next: Graphics stage 1 (not yet written)
+
+A native Fedora probe that allocates a linear and a tiled buffer with GBM on the
+Asahi render node, imports each into Honeykrisp through dma-buf and its
+modifier, renders and reads back. It is new code and will be added here once
+written. It needs no DRM master and does not touch the display.
 
 ### Result: Honeykrisp extensions (step 1)
 
