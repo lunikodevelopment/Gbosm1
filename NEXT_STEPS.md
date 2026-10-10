@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the logd, linker-config and ART smoke test ("Next action:
-bring-up stage B3d", below) and paste its output.
+bring-up stage B3e", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -642,27 +642,54 @@ Operationally tested on the M1:
   own log messages go to `logd`, which is not running.
 - The ART start was not reached.
 
-## Next action: bring-up stage B3d, why logd aborts, what linkerconfig writes, ART with a library path
+## Results: bring-up stage B3d (`root-smoke-zl4lv6oj`; reported by the user)
+
+- **`logd` aborts itself.** In the trace it connects to its own `logdw` socket
+  to write a "Crash due to signal" record, then dies by SIGABRT (`si_pid` is its
+  own pid, uid 1036). The reason before that was not in the trace excerpt (the
+  failed-call list was filled by start-up noise). From AOSP `logd/main.cpp` (read
+  on the web, not the image's binary): `DropPrivs()` calls `cap_set_proc()` and
+  aborts via `PLOG(FATAL)` if it fails; it also asks for CAP_AUDIT_CONTROL
+  when the property `ro.logd.auditd` is true (default) and CAP_SYSLOG when
+  `ro.logd.kernel` is true. A process running as uid 1036 without those
+  capabilities cannot set them. This is a hypothesis for the next run to test.
+- **`linkerconfig` created exactly two files**, `ld.config.txt` and
+  `apex.libraries.config.txt` (confirmed in the trace). From AOSP
+  `linkerconfig/main.cc`: per-apex `ld.config.txt` files come from
+  `GenerateApexConfigurations`, which only runs over modules that
+  `ScanActiveApexes` found; on a scan error it logs "Failed to scan APEX modules"
+  and uses none, and an empty module list matches the empty
+  `apex.libraries.config.txt`. The log message is lost without `logd`; not
+  confirmed.
+- **ART binary starts with a library path.** With `LD_LIBRARY_PATH` for the art,
+  i18n, runtime, conscrypt and system libraries, `dalvikvm64 -help` no longer
+  fails at `libnativehelper.so`. It now prints `Failed to initialize JNI
+  invocation API from (null)`; the trace says "Failed to dlopen libart.so:
+  dlopen failed: libra..." and the text is cut off. The missing library name is
+  not yet known. The ART start itself (S5) failed with the same message.
+- `derive_classpath` still succeeds.
+
+## Next action: bring-up stage B3e, logd without audit/kernel logging, linkerconfig log, ART library error
 
 **THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B3a to
-B3c: one small `work/asahi/root-smoke-*` directory (script, logs, strace traces);
+B3d: one small `work/asahi/root-smoke-*` directory (script, logs, strace traces);
 the tree stays mounted read-only; private tmpfs mounts take every other write and
 vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no
 SELinux module, no binder.
 
-What changes: `logd` is started under `strace`, so its failed calls and last
-lines show why it aborts; the `linkerconfig` trace is searched for the files it
-creates; and `dalvikvm64` is tried with `LD_LIBRARY_PATH` pointing at the art,
-i18n, runtime and conscrypt library directories, which bypasses the missing
-per-apex config (a test, not the fix). If that lets the ART binary start, the
-run continues with the ART start using the system boot image and the derived
-`BOOTCLASSPATH` and a main class that does not exist.
+What changes: the property area also sets `ro.logd.auditd=false` and
+`ro.logd.kernel=false` so `logd` does not need capabilities it cannot have as
+uid 1036 (this tests the hypothesis above); a plain file stands in for
+`/dev/kmsg` so `logd`'s own fatal message is captured and printed; the strace
+view of `logd` drops start-up noise; and the `dalvikvm64` library failure is
+printed in full under `strace`. If `logd` stays up, `linkerconfig` runs with a
+working log and `logcat -d` should show why it generated no per-apex configs.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-logd-art.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B3d`. Paste only the command
+Its first line reads `=== BRING-UP THREAD, STAGE B3e`. Paste only the command
 output (not the prompt line) into the thread titled "Remaining steps to boot
 Android".
 
