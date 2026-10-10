@@ -63,9 +63,18 @@ ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1
 if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority' -o "$OUT/zygote.trace"); else TR=(); fi
 "${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
 ZPID=$!
+( while kill -0 "$ZPID" 2>/dev/null; do
+    find "$ROOT"/proc/[0-9]*/fd -maxdepth 1 -lname / -printf '%p\n' 2>/dev/null > "$OUT/rootfd.tmp"
+    [ -s "$OUT/rootfd.tmp" ] && cp "$OUT/rootfd.tmp" "$OUT/rootfd.last"
+    sleep 0.2
+  done ) &
 for i in $(seq 1 "$WAIT"); do kill -0 "$ZPID" 2>/dev/null || break; sleep 1; done
 if kill -0 "$ZPID" 2>/dev/null; then echo "zygote STILL RUNNING after ${WAIT}s"; else wait "$ZPID"; echo "zygote EXITED, status $?"; fi
 echo "--- zygote stdout/stderr (first 30):"; head -n 30 "$OUT/zygote.out" | cut -c1-240
+echo "--- last snapshot of descriptors that point at / (process, number, command):"
+if [ -s "$OUT/rootfd.last" ]; then
+  while read -r f; do p="${f%/fd/*}"; echo "$f -> / ; $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-80) ; $(grep -a -m1 PPid "$p/status" 2>/dev/null)"; done < "$OUT/rootfd.last" | head -n 8
+else echo "none seen (the process may have died between snapshots)"; fi
 echo "--- zygote socket:"; ls -l "$ROOT/dev/socket" 2>&1 | cut -c1-120
 echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf '%s %s\n' "${p##*/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
 echo "--- logcat -d, last 40 (zygote, ART, libc, DEBUG):"
@@ -135,6 +144,14 @@ def launch_zygote(root, env_items):
         env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
     # app_process stops reading its own options at the first one it does not know (--socket-name),
     # so --start-system-server must come before it, as in init.zygote64.rc
+    # like init, hand over only 0-2 and the sockets; anything else the test script left open is closed
+    allowed = {s_.fileno() for s_ in keep}
+    for number in sorted(int(n) for n in os.listdir("/proc/self/fd")):
+        if number > 2 and number not in allowed:
+            try:
+                os.close(number)
+            except OSError:
+                pass
     argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote"] + flags + ["--socket-name=zygote"]
     os.execve("/system/bin/app_process64", argv, env)
 

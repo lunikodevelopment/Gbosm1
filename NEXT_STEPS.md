@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5f", below) and paste its output.
+bring-up stage B5g", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -856,18 +856,30 @@ Operationally tested on the M1:
   leaves no descriptor behind, which I have not verified).
 - The earlier credential and `setpriority` messages are warnings only.
 
-## Next action: bring-up stage B5f, find which call opened the descriptor on `/`
+## Results: bring-up stage B5f (`root-smoke-cjagmxj2`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5e: the
+- Same stop: `Not allowlisted (60): /` in `FileDescriptorInfo::CreateFromFd`.
+- **The trace did not show who opened it.** It holds no `openat` of `/` and no
+  directory open returning 60 (the only 60s are other files and sockets, since
+  descriptor numbers repeat across processes, and `readlinkat` lines whose
+  return value is a length). So descriptor 60 is probably not a plain file open
+  made by a traced call; a directory descriptor inherited from before the root
+  switch, or created by a call outside the traced set, would read as `/`.
+
+## Next action: bring-up stage B5g, close inherited descriptors and snapshot who holds one on `/`
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5f: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: no code path changes. The run now also prints the descriptor number
-from the log's "Not allowlisted" line, the trace line that returned that number (which
-call opened it, in which process) and every `openat` of `/` in the trace, so the next
-fix targets the real opener.
+What changes: (1) like init, the zygote launcher closes every descriptor except 0-2 and
+its two sockets right before starting `app_process64`, so nothing the test script
+left open is inherited; (2) while zygote runs, a watcher records every 0.2 seconds
+which process holds a descriptor pointing at `/`; the last snapshot is printed with
+the process's command line. If the abort disappears, the opener was inherited. If it
+stays, the snapshot names the process and descriptor.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
