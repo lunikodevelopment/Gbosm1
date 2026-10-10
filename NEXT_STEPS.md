@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6j", below) and paste its output.
+bring-up stage B6k", below, read-only) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1156,7 +1156,38 @@ earlier stages), which an apexd that checks it could read as "boot already finis
   `Starting sm instance on /dev/binder` and SELinux "Multiple same specifications" warnings
   from the service contexts. No enforced SELinux denials; the module was removed.
 
-## Next action: bring-up stage B6j, start .rc services on request like init, and installd
+## Results: bring-up stage B6j (`root-smoke-7y_o8ylc`; reported by the user)
+
+- The stand-in read 320 services and 71 declared interfaces from the image's `.rc` files.
+- **The image's power-stats HAL ran and registered** (operationally tested): on
+  `ctl.interface_start=aidl/android.hardware.power.stats.IPowerStats/default` it started
+  `vendor.power.stats-desktop` (`/vendor/bin/hw/android.hardware.power.stats-service.desktop`),
+  which stayed up to the end. `service list`: 11 services, new ones
+  `android.hardware.power.stats.IPowerStats/default`, `powerstats` and
+  `android.frameworks.stats.IStats/default`.
+- system_server: `PowerStatsService` (90 ms), `StartIStatsService`, then
+  **`MemtrackProxyService` waits for `android.hardware.memtrack.IMemtrack/default`**. No
+  `.rc` service declares that interface (36 requests, nothing started).
+- **installd crashed at start:** `Fatal signal 11 (SIGSEGV) ... fault addr 0x0 in tid 165
+  (installd)`. crash_dump could not attach (strace already traced it) and there is no
+  tombstoned, so no backtrace. system_server keeps logging `installd not found`.
+- kmsg: servicemanager loaded the service contexts and logs `SELinux: Unknown class
+  service_manager` (the host policy has no Android classes). Registrations still worked.
+  No enforced SELinux denials; the module was removed.
+
+## Next action: bring-up stage B6k, where memtrack is declared and where installd crashed (read-only)
+
+Nothing is run or written. It searches the tree for the memtrack HAL (`.rc` files, VINTF
+manifests, vendor apexes and binaries) and prints the last calls before installd's crash
+from the B6j trace.
+
+```bash
+R=~/Gbosm1/work/asahi/android-root-7nqprryz/root; T=$(ls ~/Gbosm1/work/asahi/root-smoke-7y_o8ylc/svc-installd-*.trace | head -n 1); echo "--- memtrack in .rc files:"; grep -r -l -i memtrack "$R"/system/etc/init "$R"/vendor/etc/init "$R"/system_ext/etc/init "$R"/odm/etc/init "$R"/apex/*/etc 2>/dev/null | head; echo "--- memtrack in VINTF manifests:"; grep -r -l -i memtrack "$R"/vendor/etc/vintf "$R"/system/etc/vintf "$R"/odm/etc/vintf 2>/dev/null | head; grep -r -h -i -B2 -A6 'memtrack' "$R"/vendor/etc/vintf 2>/dev/null | head -n 30; echo "--- memtrack files anywhere (names):"; find "$R"/vendor "$R"/system "$R"/apex "$R"/system_ext -iname '*memtrack*' 2>/dev/null | sed "s#$R##" | head -n 20; echo "--- vendor apexes (not extracted by the earlier steps):"; ls "$R"/vendor/apex 2>/dev/null | head -n 30; echo "--- installd: last 30 calls before the crash:"; grep -v -E 'futex|mmap|munmap|mprotect|madvise|PR_SET_VMA|rt_sigprocmask|brk\(' "$T" | grep -B30 -m1 'SIGSEGV' | cut -c1-200; echo "=== B6k END ==="
+```
+
+Paste the output into this thread, "Remaining steps to boot Android".
+
+## Previous action (done): bring-up stage B6j, start .rc services on request like init, and installd
 
 **THIS STEP MODIFIES STORAGE.** Scope, loss and reversal are as in B6i:
 - One new `work/asahi/root-smoke-*` directory (logs, traces, the stubs, a policy file, a
