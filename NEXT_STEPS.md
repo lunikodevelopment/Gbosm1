@@ -13,8 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one read-only command under "Run now: stage 6c" below,
-then paste its output.
+Next action: run the one command under "Run now: stage 6d" below, then paste
+its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -405,21 +405,59 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: stage 6c, what did `gsid` do around each received descriptor? (read-only)
+## Run now: stage 6d, try `gsid` codes 9 to 24 with the descriptor first
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as stage 6b: one new
+`work/asahi/real-servicemanager-*` result directory, the temporary
+`gbos_binder_probe` SELinux module and one label on the new launcher (restored
+and removed by the runner; refuses a preexisting module; SELinux stays
+enforcing), and private mounts that end with the namespace. Nothing outside the
+new directory is written; no partitioning, formatting, flashing or boot change.
+
+What changes from 6b: only the code range, 9 to 24 instead of 1 to 8. Each call is
+`service call gsiservice <code> fd /proc/self/fd/0 i64 16384` with a fresh sealed
+read-only memfd on the client's stdin. Codes that do not exist return an
+unknown-transaction error. Methods that mutate GSI state can only fail: `gsid`'s
+paths (`/data/gsi`, `/metadata/gsi`, device-mapper) do not exist in the private
+root, whose `/dev` has only the private binder and null devices. A pass for this
+question is a `gsid` system call on the received descriptor other than `close`
+(for example `fstat`, `mmap`, `read`), which the runner prints.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --serve-image system_a:/system/bin/gsid --fd-codes 9-24
+```
+
+Paste the terminal output.
+
+## Completed look: stage 6c, what did `gsid` do around each received descriptor? (read-only)
 
 This step does not modify storage: it only reads the trace file the stage 6b run
 already wrote and prints some lines; nothing is created or changed and nothing is
 executed.
 
-```bash
-cd ~/Gbosm1 && grep -n -B14 'memfd:gbos-android-parcel' work/asahi/real-servicemanager-7bw1u09s/android-runtime/server.trace | cut -c1-240 | head -260
-```
+### Result: stage 6c
 
-Paste the output. It shows the 14 system calls before each of the eight `close(5)` lines
-in `gsid`'s trace (for example whether it called `getuid`/`fstat`/`mmap` on the
-received descriptor, and where the refusal happens). From that I decide whether a
-larger probe is needed: for example a native test caller that matches the
-`IGsiService` argument layout, or choosing a different, less guarded receiver.
+Reported by the user (`server.trace` of `real-servicemanager-7bw1u09s`, lines around
+the eight `close(5</memfd:gbos-android-parcel>)` calls):
+- In all eight calls the only system call that names the received descriptor is its
+  final `close(5)`: no `fstat`, `mmap`, `read`, `ftruncate` or `dup` on it. No handler
+  consumed the descriptor for codes 1 to 8.
+- The five calls that returned `Operation not permitted` (codes 1, 3, 4, 5, 6) are the
+  five that log `libbinder.Parcel: Attempt to read or write from protected data ...
+  pos: 64 ... object size: 24` just before the close. By recollection of upstream (not
+  checked in this image) libbinder returns `PERMISSION_DENIED` (-1) from exactly this
+  check: a handler read a plain integer at offset 64, where the descriptor object is.
+  So the refusals are Parcel-layout mismatches, not a caller permission check, and these
+  five methods take a number first, not a descriptor.
+- Call 7 additionally tried to open `/metadata/gsi/dsu/install_status` (ENOENT in the
+  private root) and replied false; calls 2 and 8 take no arguments and ignored the extra data.
+
+Reading: none of codes 1-8 is a method that takes a file descriptor first. The
+descriptor-taking methods (by recollection `commitGsiChunkFromStream` and
+`setGsiAshmem`, both "descriptor then number", which is the layout already sent) must
+have higher codes.
 
 ## Completed command: stage 6b, does Android receive a file descriptor? (`gsid`; FD delivered, content not yet read)
 
@@ -473,9 +511,8 @@ denials for the servicemanager domain). Operationally tested:
 - `gsid`'s trace logs `Attempt to read or write from protected data in Parcel ... pos: 64
   ... object size: 24` for several calls: a handler tried to read plain data at offset 64,
   where my FD object sits (it is the first value after the interface token). That
-  says those handlers did not read the descriptor as an FD. The `-1` replies are
-  most likely a permission check on the caller before the argument is read; I have
-  not verified that. A `/metadata/gsi/dsu/install_status` open failing with ENOENT
+  says those handlers did not read the descriptor as an FD. (My first guess that the
+  `-1` replies were a caller permission check is superseded by the 6c result below.) A `/metadata/gsi/dsu/install_status` open failing with ENOENT
   also appears, as expected in the private root.
 
 Not established: that any Android code *read the contents* of the received file. The
