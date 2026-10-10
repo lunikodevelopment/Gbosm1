@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5g", below) and paste its output.
+bring-up stage B5h", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -866,20 +866,29 @@ Operationally tested on the M1:
   made by a traced call; a directory descriptor inherited from before the root
   switch, or created by a call outside the traced set, would read as `/`.
 
-## Next action: bring-up stage B5g, close inherited descriptors and snapshot who holds one on `/`
+## Results: bring-up stage B5g (`root-smoke-_j3o01mi`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5f: the
+- **Zygote itself created the descriptor.** Closing every inherited descriptor
+  did not help: the watcher's last snapshot shows `/proc/55/fd/60 -> /`, process 55
+  being the zygote process (the abort log names pid 55). So the directory
+  descriptor on `/` is opened by zygote's own code (or a library it loads), not by the
+  test script.
+- The earlier opener search printed only the first 6 lines ending in `= 60` (other
+  files and sockets reuse the number), which hid the one that matters; it also
+  never traced `dup`-type calls.
+
+## Next action: bring-up stage B5h, show the last calls that returned descriptor 60 in zygote
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5g: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: (1) like init, the zygote launcher closes every descriptor except 0-2 and
-its two sockets right before starting `app_process64`, so nothing the test script
-left open is inherited; (2) while zygote runs, a watcher records every 0.2 seconds
-which process holds a descriptor pointing at `/`; the last snapshot is printed with
-the process's command line. If the abort disappears, the opener was inherited. If it
-stays, the snapshot names the process and descriptor.
+What changes: the trace also records `dup`, `dup2`, `dup3`, `open_tree`, `fsopen` and
+`fspick`; and the opener section lists the last 8 traced calls that returned
+the descriptor number named in the log (process id included, `readlinkat`
+length results and sockets filtered out), instead of the first 6.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server

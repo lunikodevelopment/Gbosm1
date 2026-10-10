@@ -60,7 +60,7 @@ timeout 20 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/
 
 say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
-if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority' -o "$OUT/zygote.trace"); else TR=(); fi
+if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority,dup,dup2,dup3,open_tree,fsopen,fspick' -o "$OUT/zygote.trace"); else TR=(); fi
 "${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
 ZPID=$!
 ( while kill -0 "$ZPID" 2>/dev/null; do
@@ -73,7 +73,7 @@ if kill -0 "$ZPID" 2>/dev/null; then echo "zygote STILL RUNNING after ${WAIT}s";
 echo "--- zygote stdout/stderr (first 30):"; head -n 30 "$OUT/zygote.out" | cut -c1-240
 echo "--- last snapshot of descriptors that point at / (process, number, command):"
 if [ -s "$OUT/rootfd.last" ]; then
-  while read -r f; do p="${f%/fd/*}"; echo "$f -> / ; $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-80) ; $(grep -a -m1 PPid "$p/status" 2>/dev/null)"; done < "$OUT/rootfd.last" | head -n 8
+  while read -r f; do p="${f%/fd/*}"; echo "$f -> / ; $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-80)"; done < "$OUT/rootfd.last" | head -n 8
 else echo "none seen (the process may have died between snapshots)"; fi
 echo "--- zygote socket:"; ls -l "$ROOT/dev/socket" 2>&1 | cut -c1-120
 echo "--- processes in the namespace:"; for p in "$ROOT"/proc/[0-9]*; do printf '%s %s\n' "${p##*/}" "$(tr '\0' ' ' < $p/cmdline 2>/dev/null | cut -c1-110)"; done | head -n 15
@@ -85,7 +85,7 @@ if [ -s "$OUT/zygote.trace" ]; then
   echo "--- which call opened the file descriptor named in a 'Not allowlisted (N): path' line:"
   FDN=$(timeout 30 chroot "$ROOT" /system/bin/logcat -d 2>/dev/null | grep -a -o 'Not allowlisted ([0-9]*)' | head -n 1 | tr -dc 0-9)
   echo "descriptor number: ${FDN:-none found}"
-  [ -n "$FDN" ] && grep -E "\) += ${FDN}\$" "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | cut -c1-200 | head -n 6
+  [ -n "$FDN" ] && grep -E "\) += ${FDN}\$" "$OUT/zygote.trace" | grep -v -E 'readlinkat|socket\(|connect\(' | cut -c1-200 | tail -n 8
   echo "--- every open of a directory named / in the trace:"
   grep -E 'openat\(AT_FDCWD, "/", ' "$OUT/zygote.trace" | cut -c1-200 | head -n 8
   echo "--- failed file/network calls in the trace, distinct (first 30):"
