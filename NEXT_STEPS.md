@@ -13,8 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none for you yet. Stage 5c passed (see "Third 5c run" below); the
-next stage is proposed there and waits for your go-ahead.
+Next action: run the one read-only command under "Run now: which image program
+could serve a call (stage 6 candidate scan)" below, then say **get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -404,6 +404,30 @@ an Android-built Binder server registering with the real servicemanager (the
 image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
+
+## Run now: which image program could serve a call (stage 6 candidate scan)
+
+**THIS STEP MODIFIES STORAGE**
+
+Scope: creates one new `work/asahi/binder-servers-*` directory (a `summary.json`)
+on your Fedora filesystem. The image and everything else are only read; nothing is
+executed, no SELinux module is installed. Loss: none. Reversal: delete that
+directory.
+
+Why: Android *receiving* an FD needs an Android process that serves a Binder
+object. The real servicemanager is probably not one: by recollection of upstream
+(not checked in this image) it registers itself as context manager without
+accepting FDs, so the driver would refuse a call that carries one. The scan ranks
+the 88 Binder-linked programs from the earlier scan by static hints (registers a
+service, reads a file descriptor, avoids HAL-only dependencies, needs few extra
+libraries beyond the runtime already prepared). Hints are not proof; the next
+step would pick one candidate and inspect it before any run.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-binder-servers.py
+```
+
+After it finishes, say **get logs**.
 
 ## Run now: stage 5c, a native endpoint registers through the real `addService`
 
