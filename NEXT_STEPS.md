@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6f", below) and paste its output.
+bring-up stage B6g", below, read-only) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1096,7 +1096,34 @@ Operationally tested on the M1:
   `mkdir /cache/...` lines failed with "File exists". `/metadata` and `/data_mirror` got
   their tmpfs. No enforced SELinux denials; the module was removed.
 
-## Next action: bring-up stage B6f, why apexd stops
+## Results: bring-up stage B6f (`root-smoke-hdxvmhxl`; reported by the user)
+
+- apexd's messages are in the stand-in `/dev/kmsg`: `Started. subcommand = (null)`,
+  `File-backed mount is disabled: ro.boot.veritymode=`, then it scanned `/system/apex`
+  (36 pre-installed apexes), `/system_ext/apex` (2), `/product/apex` (1) and `/vendor/apex`.
+  The log then breaks off mid-line (`/vendor/ap`) and continues with
+  `<3>SELinux: Unknown class service_manager`, which another process wrote. The stand-in is
+  a plain file and every writer opens it without append, so later writers overwrite earlier
+  text. apexd's remaining lines were lost there. Its trace still has them, because strace
+  records every write.
+- **apexd exited by itself with status 0** (`exit_group(0)`, all threads `exited with 0`).
+  It was not killed and did not crash. `apexservice` was never registered, and system_server
+  waited as in B6e.
+- `/cache` is a symlink to `/data/cache`. The replay now created the four `/cache/...`
+  folders there (316 mkdir, no failures). No enforced SELinux denials; the module was removed.
+
+## Next action: bring-up stage B6g, apexd's full log from the B6f trace (read-only)
+
+Nothing is run or written; this only reads the trace file B6f left on disk. It prints the
+apexd log lines that strace recorded, starting near where the stand-in file broke off.
+
+```bash
+grep -a -o 'write([0-9]*, "<[0-9]>apexd: [^"]*' ~/Gbosm1/work/asahi/root-smoke-hdxvmhxl/apexd.trace | sed 's/^write([0-9]*, "//' | grep -v 'Found pre-installed APEX' | head -n 80; echo "=== B6g END ==="
+```
+
+Paste the output into this thread, "Remaining steps to boot Android".
+
+## Previous action (done): bring-up stage B6f, why apexd stops
 
 Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
 October 2026).
