@@ -10,8 +10,8 @@ Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the controlled Android Parcel probe below. It is implemented
-and awaits target execution. Retain the completed native object/FD and Android
+Next action: retry the corrected Android Parcel probe below. The first attempt
+stopped at input preparation before Android execution. Retain the completed native object/FD and Android
 empty-list results; those probes do not need to be rerun.
 
 ## One command: Android returned object and outgoing FD Parcel
@@ -26,13 +26,19 @@ and rechecks its ARM64/16 KiB ELF files. The existing extraction limits (64 MiB
 per member, 64 libraries; bounded APEX scratch if an extra library is needed)
 remain in force. Retain earlier reports and the recovery image.
 
-Inside the existing private `/dev` tmpfs, the launcher exposes a new sealed
-16 KiB memfd at `/dev/gbos-parcel-input`, a private Binder alias and the proven
-single-file readiness property fixture. The memory file is created after the
-server fork; it is not inherited by the server. The image's service client
-opens the input path read-only and serializes that FD through Android Parcel.
-The input mount, Binder/proc mounts, property file and anonymous memory file
-are released on namespace/process exit. Fedora's host `/dev` is retained.
+The launcher creates a sealed 16 KiB memfd after the server fork, reopens it
+read-only through its private proc descriptor path, and closes the original
+writable descriptor. Only the client child receives the read-only file as
+stdin (FD 0), which survives the strace/linker execs. The launcher closes its
+copy after the client fork; the server inherits no input descriptor. The image
+service CLI opens `/proc/self/fd/0` read-only and serializes that new FD through
+Android Parcel. No memfd bind mount or disk input file is needed.
+
+The existing private `/dev` tmpfs still holds the Binder alias and proven
+single-file readiness property fixture. Binder/proc mounts, the property file
+and anonymous memory file are released on namespace/process exit. Fedora's
+host `/dev` is retained. Supplying the client's stdin fixture is an input
+prerequisite; it does not demonstrate Android receiving an FD through Binder.
 
 The runner temporarily installs `gbos_binder_probe` and labels only the new
 endpoint executable, affecting the active policy/store until cleanup. It uses
@@ -52,7 +58,7 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-p
 
 The unmodified image `/system/bin/service` runs through the extracted Android
 linker with its local Bionic/system libraries, under client-only strace. It
-performs `call gbos.parcel 5658 i32 5658 fd /dev/gbos-parcel-input`. This is a
+performs `call gbos.parcel 5658 i32 5658 fd /proc/self/fd/0`. This is a
 controlled native endpoint with one private service lookup; it is not Android
 servicemanager, service registration or a HAL. The endpoint:
 
@@ -92,7 +98,8 @@ established by the target run. No image binary is patched or API intercepted.
 the new executable's recorded original context before removing the temporary
 module, following the cleanup instructions below. Delete only the new printed
 result directory after cleanup to reverse generated files. Git retains source
-history. The private input/property fixtures disappear with their namespace.
+history. The input descriptor disappears on process exit; the private property
+fixture disappears with its namespace.
 
 After it finishes, say **get logs**. I will fetch the report, summary, client
 output and trace through the HTTP listing. A pass establishes Android decoding/
@@ -100,6 +107,27 @@ calling a returned Binder object and **writing an outgoing FD Parcel**, verified
 by the native endpoint. It does not establish Android receiving/reading an FD,
 exporting a local Binder object, full lifetimes, death notifications, DMA-BUF,
 fences, real servicemanager, HALs, Android boot or graphics.
+
+### First Android Parcel attempt: stopped before client execution
+
+Fetched report, summary, execution stderr and runtime directory listing from
+`work/asahi/android-parcel-probe-z0iwsov0` on the Fedora HTTP server.
+
+- Build exit 0 with no diagnostics; Binder protocol 8 and page size 16384.
+- Memfd context matched the policy's `user_tmp_t`.
+- Execution exit 1: `bind private sealed Parcel input: Invalid argument`.
+  No `PARCEL_INPUT=READY`, Android output or client trace was created. The
+  attempted anonymous memfd bind mount failed before the Android client fork.
+- The old summary then reported a missing `parcel-client.stdout`, obscuring
+  the earlier mount error. The runner now records the execution error first
+  and collects any available client output/trace during cleanup.
+- Executable context restoration and module removal both exited 0. The
+  recent AVC query returned `<no matches>`. No manual cleanup is needed.
+
+The corrected launcher supplies the read-only sealed fixture on client stdin
+and removes the unsupported input bind mount. The command above pulls this
+fix and creates a new result directory. Android object/FD execution and wire
+compatibility remain pending; keep this failed run as provenance.
 
 ## Completed native Binder object/FD milestone
 
