@@ -7,6 +7,7 @@ directory: android-runtime/ (linker, servicemanager, libraries) and sm-root/
 """
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -146,13 +147,32 @@ def prepare(out, log, server=None):
                 shutil.copyfile(candidate, destination)
                 origin = 'earlier extracted runtime:' + name
             else:
-                try:
-                    extract('system_a', '/system/lib64/' + name, destination)
-                    origin = 'system_a:/system/lib64/' + name
-                except ValueError:
-                    destination.unlink(missing_ok=True)
-                    extract('vendor_a', '/lib64/' + name, destination)
-                    origin = 'vendor_a:/lib64/' + name
+                origin = None
+                for part, directory in (('system_a', '/system/lib64'), ('vendor_a', '/lib64')):
+                    target = directory + '/' + name
+                    try:
+                        for _ in range(4):  # follow a symlink stored as its target text
+                            destination.unlink(missing_ok=True)
+                            extract(part, target, destination)
+                            head = destination.read_bytes()[:4096]
+                            if head[:4] == b'\x7fELF':
+                                break
+                            text = head.decode(errors='replace').strip()
+                            if not re.fullmatch(r'[A-Za-z0-9_./+-]{1,200}', text):
+                                raise ValueError('not an ELF file or a symlink target')
+                            target = os.path.normpath(text if text.startswith('/') else str(Path(target).parent / text))
+                            if target.startswith('/vendor/'):
+                                part, target = 'vendor_a', target[len('/vendor'):]
+                            elif not target.startswith('/system/') and part == 'system_a':
+                                raise ValueError('symlink leaves the system partition')
+                        else:
+                            raise ValueError('symlink chain too long')
+                        origin = f'{part}:{target}'
+                        break
+                    except ValueError:
+                        destination.unlink(missing_ok=True)
+                if origin is None:
+                    raise ValueError('not found as an ELF file in system_a /system/lib64 or vendor_a /lib64')
             pending.update(inspect(destination, origin))
         except ValueError as error:
             destination.unlink(missing_ok=True)
