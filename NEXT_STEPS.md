@@ -13,8 +13,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none for you right now. Stage 8b passed (below); the next stage
-waits on a direction decision in the thread.
+Next action: run the read-only ART/zygote scan (first section after the stage
+8b results, below) and paste its output. Stage 8b passed; you chose the ART
+runtime as the next direction.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -404,6 +405,25 @@ an Android-built Binder server registering with the real servicemanager (the
 image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
+
+## Next action: ART / apex / zygote scan (read-only)
+
+**This step modifies no system file and does not touch the image.** It writes
+only one new `work/asahi/art-scan-*` result directory (a text report). Delete
+that directory to reverse it. Nothing from the image is executed or unpacked.
+
+Why: the Java side (zygote, system_server) needs ART, the apex files and the
+boot images. Before any start attempt, this lists which of those the image
+actually contains (apex names, `/system/framework` boot images and jars,
+`app_process`/`dalvikvm`-type binaries) and every zygote or BOOTCLASSPATH line
+in the `.rc` files. It shows presence only, not that anything is valid or can
+run.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-art.py
+```
+
+Paste the terminal output.
 
 ## Results: stage 8b (`real-servicemanager-wn7agd9c`)
 
