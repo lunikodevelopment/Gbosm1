@@ -13,8 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 6b" below, then say
-**get logs**.
+Next action: run the one read-only command under "Run now: stage 6c" below,
+then paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -405,7 +405,23 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: stage 6b, does Android receive a file descriptor? (`gsid`)
+## Run now: stage 6c, what did `gsid` do around each received descriptor? (read-only)
+
+**THIS STEP MODIFIES STORAGE**: it does not. It only reads the trace file
+the stage 6b run already wrote and prints a few lines; nothing is created or changed
+and nothing is executed. (If your shell redirects output, that file is yours.)
+
+```bash
+cd ~/Gbosm1 && grep -n -B14 'memfd:gbos-android-parcel' work/asahi/real-servicemanager-7bw1u09s/android-runtime/server.trace | cut -c1-240 | head -260
+```
+
+Paste the output. It shows the 14 system calls before each of the eight `close(5)` lines
+in `gsid`'s trace (for example whether it called `getuid`/`fstat`/`mmap` on the
+received descriptor, and where the refusal happens). From that I decide whether a
+larger probe is needed: for example a native test caller that matches the
+`IGsiService` argument layout, or choosing a different, less guarded receiver.
+
+## Completed command: stage 6b, does Android receive a file descriptor? (`gsid`; FD delivered, content not yet read)
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -435,11 +451,37 @@ memfd (`memfd:gbos-android-parcel`) after the call; the runner collects those li
 gsid that cannot start without Android init, or that exits, is an acceptable
 result to report.
 
-```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --serve-image system_a:/system/bin/gsid --fd-codes 1-8
-```
+### Result: stage 6b
 
-After it finishes, say **get logs** (paste the terminal output).
+Reported by the user (`work/asahi/real-servicemanager-7bw1u09s`; launcher exit 0,
+cleanup 0/0; the only new AVC lines are two more `/dev/__properties__` `open`
+denials for the servicemanager domain). Operationally tested:
+- The image's unmodified `/system/bin/gsid` started in the private root, registered
+  `gsiservice: [android.gsi.IGsiService]` with the real servicemanager, and answered
+  the interface-descriptor call (`android.gsi.IGsiService`, exit 0).
+- For each code 1 to 8 the image's `service call gsiservice <code> fd /proc/self/fd/0
+  i64 16384` exited 0. In `gsid`'s own `strace -yy` the sent memfd appears as
+  `5</memfd:gbos-android-parcel>(deleted)` and is closed by `close(5)` after each of the
+  eight calls. So the kernel installed the descriptor into the Android server's fd
+  table and libbinder released it afterwards: an Android process *received* an FD
+  sent through a Binder call.
+- Replies by code: 1, 3, 4, 5, 6 returned `Error: 0xffffffffffffffff "Operation not
+  permitted"` (status -1); 2 returned a 36-byte reply (status 0, then a zeroed
+  32-byte parcelable, consistent with a progress query that takes no arguments);
+  7 returned `00000000 00000000`; 8 returned `00000000 00000001`. Which method each
+  code is remains unverified.
+- `gsid`'s trace logs `Attempt to read or write from protected data in Parcel ... pos: 64
+  ... object size: 24` for several calls: a handler tried to read plain data at offset 64,
+  where my FD object sits (it is the first value after the interface token). That
+  says those handlers did not read the descriptor as an FD. The `-1` replies are
+  most likely a permission check on the caller before the argument is read; I have
+  not verified that. A `/metadata/gsi/dsu/install_status` open failing with ENOENT
+  also appears, as expected in the private root.
+
+Not established: that any Android code *read the contents* of the received file. The
+trace only shows delivery and close. The next step (read-only, existing files) looks at
+exactly what `gsid` did around each received descriptor to see whether the refusals
+come before or after the FD is read.
 
 ## Completed command: stage 6a, an image program serves, the image's `service` CLI calls it (passed)
 
