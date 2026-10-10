@@ -82,13 +82,16 @@ def launch_zygote(root, env_items):
     os.chdir("/")
     sockets = Path("/dev/socket")
     sockets.mkdir(parents=True, exist_ok=True)
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.bind("/dev/socket/zygote")
-    os.chmod("/dev/socket/zygote", 0o660)
-    s.listen(8)
-    os.set_inheritable(s.fileno(), True)
     env = dict(item.split("=", 1) for item in env_items)
-    env["ANDROID_SOCKET_zygote"] = str(s.fileno())
+    keep = []
+    for name in ("zygote", "usap_pool_primary"):  # init.zygote64.rc declares both: stream 660 root system
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(f"/dev/socket/{name}")
+        os.chmod(f"/dev/socket/{name}", 0o660)
+        s.listen(8)
+        os.set_inheritable(s.fileno(), True)
+        keep.append(s)
+        env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
     argv = ["app_process64", "-Xzygote", "/system/bin", "--zygote", "--socket-name=zygote"]
     os.execve("/system/bin/app_process64", argv, env)
 
@@ -117,7 +120,7 @@ def main():
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
                "bash", str(script), str(root), str(out), shutil.which("python3") or "python3",
                str((HERE / "smoke-logd-art.py")), str(HERE / "make-property-area.py"),
-               str(HERE / "elf-needed.py"), str(HERE / "make-apex-info-list.py"), str(Path(__file__).resolve()), "60"]
+               str(HERE / "elf-needed.py"), str(HERE / "make-apex-info-list.py"), str(Path(__file__).resolve()), "30"]
     done = subprocess.run(command, capture_output=True, text=True, timeout=900)
     text = done.stdout + done.stderr
     (out / "log.txt").write_text(text)

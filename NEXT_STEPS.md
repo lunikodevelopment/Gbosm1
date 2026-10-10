@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B4d", below) and paste its output.
+bring-up stage B4e", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -755,17 +755,38 @@ Operationally tested on the M1:
   incomplete; I do not yet know which name the image's build.prop files use for the
   ABI list (no listing of them is in this repository).
 
-## Next action: bring-up stage B4d, same test; the property stand-in prints every ABI-list property it finds
+## Results: bring-up stage B4d (`root-smoke-5ccmhpam`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4c: the
-rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory;
-private tmpfs takes the rest. Loss: none. Reversal: delete the printed directory.
-No sudo, no SELinux module, no binder, no partition, boot or flash change.
+- **The ABI-list properties were there under the older spelling**
+  (`ro.vendor.product.cpu.abilist64=arm64-v8a`, also odm and system); the B4d
+  fallback derived `ro.product.cpu.abilist64`. `app_process64` no longer aborts on it.
+- **Zygote's preload ran to completion** (operationally tested, in the sandbox,
+  without binder): ART started with the boot image, the framework's classes
+  loaded (342 compat rules read), native libraries such as `libwebviewchromium_loader.so`
+  and `libhttpengine.so` loaded through the apex namespaces, and the log shows
+  `Called ZygoteHooks.endPreload()`, `end preload` and two concurrent GCs.
+- **It then stopped at the next missing piece**: `Socket unset or invalid:
+  ANDROID_SOCKET_usap_pool_primary`. init.zygote64.rc declares two sockets for
+  zygote (`zygote` and `usap_pool_primary`, both stream 660); only `zygote` was
+  passed.
+- Harmless misses: no `/data/resource-cache`, `/mnt/expand`, `/sys/devices/system/cpu/*`,
+  `qgl_config.txt`, `/dev/socket/statsdw`; `setpriority -8` denied (unprivileged
+  namespace root). The SIGSEGV lines at the end of the trace are shutdown noise
+  after the exception, not a separate failure.
 
-What changes: `make-property-area.py` also accepts the older `ro.<partition>.product.<x>`
-spelling (e.g. `ro.vendor.product.cpu.abilist64`), and prints every property whose
-name contains `abilist` right under the "S0 property area" header. That printout
-shows which names the image really defines, so the next fix rests on evidence.
+## Next action: bring-up stage B4e, zygote with both init sockets
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B4d: the
+rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
+(logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
+printed directory. No sudo, no SELinux module, no binder, no partition, boot or
+flash change.
+
+What changes: the launcher also creates `/dev/socket/usap_pool_primary` and passes
+it as `ANDROID_SOCKET_usap_pool_primary`. The wait is 30 seconds. If zygote now
+stays alive, the result is "zygote STILL RUNNING" with the sockets listed, which
+means it reached its accept loop; still no `--start-system_server`, because
+system_server needs binder and servicemanager (the later stage).
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py
