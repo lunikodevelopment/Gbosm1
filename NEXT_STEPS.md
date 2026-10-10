@@ -4,16 +4,48 @@
 and retain the existing checkout and result directories.
 
 Last updated: 10 October 2026, Europe/Amsterdam.
-Current status: Bionic Toybox execution, native private Binder echo and Android
-libbinder's empty-list request/reply all passed on Fedora Asahi ARM64/16 KiB.
+Current status: Bionic Toybox execution, native Binder echo, Android libbinder's
+empty-list request/reply, and native Binder object/FD transfer all passed on
+Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the native Binder object/FD prerequisite below. Its source and
-runner are implemented; target execution remains pending. Retain the completed
-Android libbinder result; its empty-list probe does not need to be rerun.
+Next action: retain the completed object/FD and Android libbinder results; these
+probes do not need to be rerun. The next Binder milestone is Android Parcel
+object/FD handling against a controlled endpoint before real servicemanager or
+HAL integration. No new execution command is issued by this result review.
 
-## One command: native Binder object and FD transfer
+## Completed native Binder object/FD milestone
+
+User-supplied report and summary:
+`/home/gbos_user/Gbosm1/work/asahi/binder-transfer-probe-1iegvhjx`.
+
+| Operation | Result | Scope |
+|---|---|---|
+| Build | Exit 0, no compiler diagnostics | Native ARM64 probe compiled against the target headers. |
+| Execution | Exit 0; Binder protocol 8, pages 16384 | Two native Linux processes used the private Binder device. |
+| Received memfd on server | BINDER_FD_SERVER=PASS | Full 16 KiB pattern, mmap/pread, seals, read-only mode and CLOEXEC verified. |
+| Returned FD on client | BINDER_FD_CLIENT=PASS | Separately installed descriptor, same device/inode, contents and flags verified. |
+| Returned Binder object and call | BINDER_OBJECT_SERVER=PASS and BINDER_OBJECT_CLIENT=PASS | Nonzero translated handle reached the original server object/cookie and returned the verified payload. |
+| Completion | BINDER_TRANSFER_SERVER=PASS and BINDER_TRANSFER=PASS; no missing markers | Final acknowledgement and both process exits completed. |
+| Memfd type | user_tmp_t in preflight and runtime | Actual runtime type matched the generated scoped policy. |
+| Executable label restoration | Exit 0 | Original new-executable context restored. |
+| Temporary module removal | Exit 0, last priority removed | Dedicated module removed after execution. |
+| Recent AVC query | Exit 1, `<no matches>` | No matching AVCs in the queried window; not a historical audit. |
+
+Overall summary exit_status is 0 and execution stderr is empty. The adjacent
+object success lines interleaved in stdout because both processes wrote to the
+same report stream; both complete markers are present. This is not a failed or
+missing check. No manual policy cleanup or repeat run is needed.
+
+This establishes one native Binder object call and a sealed read-only memfd
+round trip under the dedicated SELinux development policy. Android Parcel
+object/FD handling, DMA-BUF, fences, death notifications, full object lifetimes,
+real servicemanager, HALs and graphics remain untested.
+
+## Completed command: native Binder object and FD transfer
+
+Retained as provenance. The run above passed; do not repeat it for this milestone.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -84,8 +116,7 @@ After cleanup, deleting only the new printed result directory reverses generated
 files. Source versions remain recoverable in Git. No partition, boot policy or
 existing Binder device is changed by this step.
 
-After it finishes, say **get logs**. I will retrieve this run's report and
-summary from the HTTP directory listing. A pass establishes one native Binder
+The report and summary have been received and establish one native Binder
 object call and a sealed memfd round trip on the running kernel. Android object/
 FD Parcel handling, DMA-BUF allocation/sharing, fences, death notifications,
 complete object lifetimes, real servicemanager, HALs and graphics remain later
@@ -512,7 +543,7 @@ User-supplied Fedora output on 10 October 2026 establishes:
 |---|---|---|
 | Running kernel | `7.1.6-400.asahi.fc44.aarch64+16k` | Collector output; installed kernel headers are a separate package. |
 | Runtime page size | 16384 bytes | Confirmed by collector and GPU probe. |
-| Binder IPC / binderfs | Native echo and Android libbinder empty-list exchange passed with protocol 8 on 16 KiB pages | Dedicated SELinux server domain; verified request/reply, temporary module removed and executable label restored. Real Android servicemanager and object/FD transfer remain untested. |
+| Binder IPC / binderfs | Native echo, Android libbinder empty-list exchange, and native object/FD round trip passed with protocol 8 on 16 KiB pages | Dedicated SELinux server domain; verified request/reply, object call and sealed memfd transfer; temporary module removed and executable label restored. Android Parcel object/FD handling and real servicemanager remain untested. |
 | DMA-BUF / DMA heaps | Configured `y`; system heap node present | Allocation and sharing remain untested. |
 | GPU kernel driver | Asahi module loaded; `renderD128` and `card2` use Asahi | Collector evidence. |
 | Internal display | `apple-drm`, connected eDP, 2560×1600 mode | Enumeration only; Android composition remains untested. |
@@ -547,8 +578,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Extend the completed Binder milestone to verified object/FD transfer before
-   attempting real Android servicemanager or HAL integration.
+1. Extend the completed native object/FD milestone to Android Parcel object/FD
+   handling before real Android servicemanager or HAL integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
