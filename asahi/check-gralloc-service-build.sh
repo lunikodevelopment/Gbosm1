@@ -23,7 +23,9 @@ OUT=$(mktemp -d "$W/gralloc-check-XXXXXXXX")
 echo "Results: $OUT"
 exec > >(tee "$OUT/report.txt") 2>&1
 echo "NDK/HK: $HK"; echo "AOSP sources: $SRC"; echo "Generated AIDL: $GEN"; echo "minigbm: $MG"
-EXTRA=$(ls -dt "$W"/aosp-gralloc-extra-* 2>/dev/null | head -1)
+EXTRA=$(ls -d "$W"/aosp-gralloc-extra-* "$W"/aosp-gralloc-more-* 2>/dev/null | tr '\n' ' ')
+EXTRA_FIRST=$(ls -dt "$W"/aosp-gralloc-extra-* 2>/dev/null | head -1)
+MORE=$(ls -dt "$W"/aosp-gralloc-more-* 2>/dev/null | head -1)
 # Every include-like directory in the fetched trees, so missing headers show up as "found here, not on the path".
 INCS=$(find "$SRC" $EXTRA -type d \( -name include -o -name include_cpp -o -name include_platform -o -name include_ndk -o -name include_sdk \) \
         -not -path '*/.git/*' 2>/dev/null | sort)
@@ -36,6 +38,7 @@ TOOL_PP="clang++ --target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -res
 HIDL=$(newest 'hidl-build-*' generated/android/hardware/graphics/mapper/4.0/IMapper.h)
 [[ -n $HIDL ]] && echo "Generated HIDL headers: $HIDL"
 HIDLINC=; [[ -n $HIDL ]] && HIDLINC="-I$HIDL/generated -I$HIDL/system_libhwbinder/include"
+[[ -n $MORE && -d $MORE/generated ]] && HIDLINC="$HIDLINC -I$MORE/generated"
 FLAGS="-I$GEN/generated/include $HIDLINC -I$ROOT/asahi/android-shims -I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm -I$MG -I$MG/cros_gralloc $IFLAGS"
 FILES="cros_gralloc/aidl/Allocator.cpp cros_gralloc/aidl/Main.cpp cros_gralloc/mapper_stablec/Mapper.cpp"
 for f in $(cd "$MG" && ls cros_gralloc/*.cc 2>/dev/null); do FILES="$FILES $f"; done
@@ -54,8 +57,11 @@ for f in $FILES; do
         | grep -v '^/' | sed "s|^|$f |" >> "$OUT/missing.txt"
 done
 awk '{print $2}' "$OUT/missing.txt" | sort | uniq -c | sort -rn | while read -r cnt h; do
-    where=$(find "$SRC" $EXTRA -path "*/$h" -not -path '*/.git/*' 2>/dev/null | head -3 | sed "s|$SRC/||" | tr '\n' ' ')
-    echo "$h (x$cnt): ${where:-NOT IN FETCHED TREES}"
+    found=$(find "$SRC" $EXTRA -path "*/$h" -not -path '*/.git/*' 2>/dev/null | head -3)
+    echo "$h (x$cnt): $(echo "$found" | sed "s|$W/||" | tr '\n' ' ')${found:+}$([[ -z $found ]] && echo 'NOT IN FETCHED TREES')"
+    echo "   needed by: $(grep -F " $h" "$OUT/missing.txt" | awk '{print $1}' | sort -u | tr '\n' ' ')"
+    # A header that exists in the trees but is still reported missing: show the file and what is on the path.
+    for w in $found; do ls -ld "$w"; echo "   on include path: $(echo "$INCS" | grep -c -F "${w%/$h}")"; done
 done
 echo
 echo '== Other first errors per file'

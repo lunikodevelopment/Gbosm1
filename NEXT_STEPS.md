@@ -2482,7 +2482,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3m complete; stage 3n (recheck service headers) is next
+## Graphics: stages 0, 1, 2 and 3a-3m complete; stage 3n-b (last header sources) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2520,26 +2520,34 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3n, recheck the service headers with the generated HIDL code
+### Next: Graphics stage 3n-b, fetch the last header sources and recheck
 
-Same syntax-only check as stage 3k, now with the stage 3m HIDL headers and the
-libhwbinder headers on the path. Because the compiler stops at the first
-missing header in each include chain, this pass should get further and list
-the next layer of missing headers (expected candidates from earlier stages:
-`system/graphics.h`, `BufferAllocator`, cutils/utils/log pieces). Nothing is
-built or run. I have not run the updated script here.
+Stage 3n (reported) got one layer further with the generated HIDL headers on
+the path. Still missing: `nativebase/nativebase.h` (6 files, in
+`frameworks/native` `libs/nativebase`), `fmq/MQDescriptorBase.h` (3 files,
+`system/libfmq`) and `android/hidl/manager/1.0/IServiceNotification.h` (3 files;
+HIDL-generated, `hidl-gen` can produce it from `system/libhidl`).
+`hardware/gralloc.h` is also still reported missing although the file exists in
+the fetched `hardware/libhardware` tree, so the recheck now prints why (which
+files need it and whether its directory is on the path).
+
+This step does two small sparse clones, generates the
+`android.hidl.manager@1.0` headers with the stage 3m `hidl-gen`, then reruns
+the syntax-only check. I have not run either updated script here.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gralloc-check-*` directory with logs and
-`report.txt`. Earlier results are only read. Delete the directory to reverse.
+Creates one new `work/asahi/aosp-gralloc-more-*` directory (the clones and
+generated headers) and one `work/asahi/gralloc-check-*` directory. Nothing is
+installed. Delete the directories to reverse.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
+bash asahi/prepare-gralloc-headers.sh
 bash asahi/check-gralloc-service-build.sh
 ```
 
-Send the printed `report.txt`.
+Send both printed reports (the two `report.txt` files).
 
 ### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation
 
