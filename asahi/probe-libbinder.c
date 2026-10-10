@@ -105,6 +105,7 @@ static void list_server(const char *path, int ready) {
     require(0, "too many metadata requests before listServices");
 }
 int main(int argc, char **argv) {
+    if (signal(SIGALRM, timeout_exit) == SIG_ERR) fail("install alarm handler");
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 4 && strcmp(argv[1], "--server") == 0) {
         char *end; long ready = strtol(argv[3], &end, 10);
@@ -115,10 +116,11 @@ int main(int argc, char **argv) {
     require(argc == 3 && sysconf(_SC_PAGESIZE) == 16384, "requires mount directory, runtime and 16 KiB pages");
     alarm(25);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs");
-    char control_path[4096], device_path[4096], linker[4096], client[4096], libraries[4096];
+    char control_path[4096], device_path[4096], linker[4096], client[4096], libraries[4096], trace[4096];
 #define PATH_JOIN(dst, root, leaf) require(snprintf(dst, sizeof(dst), "%s/%s", root, leaf) < (int)sizeof(dst), "path too long")
     PATH_JOIN(control_path, argv[1], "binder-control"); PATH_JOIN(device_path, argv[1], "asahi-service-stub");
     PATH_JOIN(linker, argv[2], "linker64"); PATH_JOIN(client, argv[2], "service"); PATH_JOIN(libraries, argv[2], "lib64");
+    PATH_JOIN(trace, argv[2], "client.trace");
     int control = open(control_path, O_RDWR | O_CLOEXEC);
     if (control < 0) fail("open private control");
     struct binderfs_device device = {0}; strcpy(device.name, "asahi-service-stub");
@@ -150,8 +152,13 @@ int main(int argc, char **argv) {
     require(read(ready[0], &token, 1) == 1 && token == 'R', "stub stopped before readiness"); close(ready[0]);
     pid_t client_pid = fork(); if (client_pid < 0) fail("fork Android client");
     if (client_pid == 0) {
-        if (setenv("LD_LIBRARY_PATH", libraries, 1)) fail("set local Android library path");
-        execl(linker, linker, client, "list", (char *)NULL); fail("execute Android service client");
+        char library_env[sizeof(libraries) + 32];
+        require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) <
+                (int)sizeof(library_env), "library environment too long");
+        puts("Starting Android service list under client-only syscall tracing.");
+        execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160",
+              "-o", trace, "-E", library_env, linker, client, "list", (char *)NULL);
+        fail("execute traced Android service client");
     }
     int client_status, server_status;
     require(waitpid(client_pid, &client_status, 0) == client_pid && WIFEXITED(client_status) &&
