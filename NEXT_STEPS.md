@@ -53,6 +53,22 @@ cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && ob
 Say **get logs** with the output. If `objdump` is missing, say so; do not
 install packages for this.
 
+## One command: read-only disassembly of ServiceWithMetadata decoder
+
+Result of the `Service::readFromParcel` disassembly (reported, from
+`lib64/libbinder.so` in `android-parcel-probe-rxdul6oa`): it reads an int32 tag;
+tag 0 calls `Parcel::readParcelable` (the sized `ServiceWithMetadata`), tag 1
+calls `readNullableStrongBinder` directly, any other tag returns -EINVAL (-22).
+This matches the reply's tag 0 and sized parcelable, so the union tag is not the
+fault. The field layout inside `ServiceWithMetadata` is not yet read from the
+image. No storage is modified. On the M1:
+
+```bash
+cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && objdump -d --no-show-raw-insn --start-address=0x6c800 --stop-address=0x6cb00 libbinder.so 2>&1 | head -200
+```
+
+Say **get logs** with the output.
+
 ## One command: Android returned object and outgoing FD Parcel
 
 **THIS STEP MODIFIES STORAGE**
