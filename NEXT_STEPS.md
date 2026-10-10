@@ -1060,57 +1060,68 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics stage 0: read-only evidence (queued, independent of Binder work)
+## Graphics stage 0: display step still to run (steps 1 and 3 done)
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
-(Mesa Asahi GLES plus Honeykrisp built for Android, a GBM-backed minigbm
+(Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
 allocator/mapper, AOSP drm_hwcomposer on `apple-drm`). This is a plan, not a
-result; nothing in it has been built. Stage 0 decides whether the buffer and
-display path it assumes exists. These steps can run before or after the Binder
-steps above; neither depends on the other.
+result; nothing in it has been built. Independent of the Binder steps above.
 
-**THIS STEP MODIFIES STORAGE** (step 3 only)
+### Remaining: display planes, formats and modifiers (read-only)
 
-Steps 1 and 2 only read. Step 3 creates one new `work/asahi/graphics-image-*`
-report directory and reads the recovery image; delete that directory to
-reverse it. Nothing is installed except, if missing, the `drm_info` package.
+The first attempt stopped because `drm_info` is not installed. Installing the
+package is the only change; `drm_info` itself reads and sets no mode.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only
-
-# 1. Vulkan extensions already saved by the completed probe (read-only).
-grep -E 'api=|driver id|external_memory|drm_format_modifier|external_semaphore|external_fence|queue_family_foreign|ycbcr|swapchain' \
-  work/asahi/results-7EXxM0au/capabilities.log work/asahi/results-7EXxM0au/readback.log
-
-# 2. Display planes, formats and modifiers (read-only; no mode is set).
-#    Install drm_info first if it is missing: sudo dnf install drm_info
+sudo dnf install drm_info
 drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
-#    If it reports permission denied on card2, rerun read-only with sudo:
-#    sudo drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
-
-# 3. Image GPU driver files and graphics properties (static; nothing executed).
-python3 asahi/inspect-graphics-image.py
+# If it reports permission denied on card2, rerun read-only with sudo:
+# sudo drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
 ```
 
-Send: the step 1 grep output, `/tmp/drm_info.txt` (it contains device and
-display details; review before sharing publicly), and the step 3
-`summary.json`.
+Send `/tmp/drm_info.txt` (it contains device and display details; review
+before sharing publicly). It shows which formats and modifiers the `apple-drm`
+primary plane accepts, whether it is atomic, and whether overlay planes and
+`IN_FENCE_FD`/`OUT_FENCE_PTR` exist. Until then the plan assumes linear
+XRGB8888 on one plane.
 
-What the results decide:
+### Result: Honeykrisp extensions (step 1)
 
-- Step 1: whether Honeykrisp exposes `VK_EXT_external_memory_dma_buf`,
-  `VK_EXT_image_drm_format_modifier` and fd semaphore/fence export. All three
-  are needed for Android buffer import through Mesa; if any is missing the plan
-  changes before any build.
-- Step 2: which formats and modifiers the `apple-drm` primary plane accepts,
-  whether it is atomic, and whether it has overlay planes and fence properties
-  (`IN_FENCE_FD`, `OUT_FENCE_PTR`). Until this is read, the plan assumes linear
-  XRGB8888 on one plane.
-- Step 3: whether the image ships ANGLE or prefers it, and which EGL/Vulkan
-  property values the vendor Mesa build must replace.
+Reported by the user from the saved `work/asahi/results-7EXxM0au/capabilities.log`
+(enumerated, not exercised): Apple M1 (G13G B1), Vulkan API 1.4.354,
+Honeykrisp (driver id 26), Mesa 26.2.4. Device extensions include
+`VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier`,
+`VK_KHR_external_memory_fd`, `VK_KHR_external_semaphore_fd`,
+`VK_KHR_external_fence_fd`, `VK_EXT_queue_family_foreign` and
+`VK_KHR_sampler_ycbcr_conversion`. These are the import, modifier and sync
+extensions Mesa's Android buffer path builds on, so the stage 0 Vulkan gate
+passes. No dma-buf import or export has been run yet.
 
-Stage 1 (a native GBM to Vulkan dma-buf round trip on Fedora) is new code and
-will be added only after these results.
+### Result: image graphics files and properties (step 3)
+
+Reported by the user from `work/asahi/graphics-image-f2q_lo9q` (static; nothing
+executed):
+
+- GLES is ANGLE: `ro.hardware.egl=angle`, `ro.gfx.angle.supported=true`, and
+  system_a ships `libEGL_angle.so`, `libGLESv1_CM_angle.so` and
+  `libGLESv2_angle.so`. ANGLE runs on the Vulkan driver, so the image needs no
+  native vendor GLES driver.
+- Vulkan is `ro.hardware.vulkan=adreno` with `vendor_a:/lib64/hw/vulkan.adreno.so`;
+  HWUI and RenderEngine are set to Vulkan (`ro.hwui.use_vulkan=true`,
+  `debug.renderengine.vulkan=true`, Graphite opt-in).
+- Allocator: vendor `allocator-V2-ndk` plus QTI allocator libraries. Mapper:
+  `vendor_a:/lib64/hw/mapper.qti.so` (stable-C mapper 5.0) and a HIDL 4.0 QTI
+  mapper. Vendor also has `libcros_gralloc_bindgen.dylib.so`, a name that
+  suggests ChromeOS gralloc (minigbm) bindings; its use is unknown.
+- Composer: `drm_hwcomposer_atom_reporter.so` is present, consistent with the
+  earlier audit's DRM-named HWC3, and `ro.vendor.hwc.drop_drm_master=1`.
+- Display properties assume wide color, HDR, protected content and hole punch;
+  these will need lowering for a first `apple-drm` bring-up (inference, not tested).
+- Board platform `hamoa`, `ro.opengles.version=196610` (GLES 3.2).
+
+Effect on the plan: the recommended GLES path changes from Mesa's Asahi GLES
+driver to the image's own ANGLE on Honeykrisp. The Vulkan driver becomes the
+single GPU driver to build for Android; `ro.hardware.vulkan` would select it.
 
 ## Later milestones
 
