@@ -11,10 +11,31 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none is queued. The Android Parcel probe is complete. Candidate
-next probes (each needs its own evidence and a runbook entry before it is run):
-Android receiving and reading an FD, or Android exporting a local Binder object.
-Retain all earlier results; no completed probe needs rerunning.
+Next action: run the read-only Binder-client scan below to find image programs
+that could receive and read a file descriptor. Retain all earlier results; no
+completed probe needs rerunning.
+
+## One command: scan the image for Binder-linked executables
+
+**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+
+Scope: creates one new `work/asahi/binder-clients-*` directory with a
+`summary.json`. The recovery image is only read (`dump.erofs`, no mount, no
+execution). Reversal: delete the newly printed result directory.
+
+Why: the image's `service` CLI only prints reply bytes, so it cannot show Android
+reading an FD (this is recalled from upstream `service.cpp`, not checked in
+this image). Reading an FD needs a program that links libbinder and consumes a
+reply Parcel. The scan lists executables in `system_a:/system/bin` and
+`vendor_a:/bin` whose `DT_NEEDED` contains `libbinder.so` or `libbinder_ndk.so`.
+The script is new and has not yet been run. It does not prove any listed program
+can read an FD.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/audit-binder-clients.py
+```
+
+Say **get logs** with the output (the printed `summary.json` path is enough).
 
 ## Android Parcel probe: markers passed with the 52-byte lookup reply
 
