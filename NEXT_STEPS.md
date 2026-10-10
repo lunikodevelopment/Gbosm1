@@ -2453,6 +2453,18 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-hidl-gen-host.sh
 ```
 
+Third run (reported): 52 of 58 units compiled. Remaining: missing
+`<cstring>`/`<algorithm>` transitive includes with this libstdc++ (now forced for
+`hidl-gen` units), `hwbinder/IBinder.h` (the script now shallow-clones
+`system/libhwbinder`, a small download, into the result directory), and my script
+had copied the generated parser header over `hidl-gen_y-helpers.h`, hiding the
+real one (fixed). Same rerun lines:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-hidl-gen-host.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3l, HIDL and gralloctypes dependencies

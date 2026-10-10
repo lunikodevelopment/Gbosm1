@@ -18,7 +18,7 @@ AB=$(newest 'aidl-build-*' aidl)
 for v in SRC EXTRA AB; do [[ -n ${!v} ]] || { echo "Missing earlier result for $v (stages 3i, 3j and 3l are required)." >&2; exit 1; }; done
 H=$EXTRA/system_tools_hidl; B=$SRC/system_libbase; HI=$SRC/hardware_interfaces; LH=$EXTRA/system_libhidl
 echo 'THIS STEP MODIFIES STORAGE'
-echo "Creates one new $W/hidl-build-* directory: object files, the built hidl-gen, generated C++ headers and report.txt."
+echo "Creates one new $W/hidl-build-* directory: a tiny shallow clone of libhwbinder, object files, the built hidl-gen, generated C++ headers and report.txt."
 echo 'Earlier results are only read. Delete the new directory to reverse.'
 OUT=$(mktemp -d "$W/hidl-build-XXXXXXXX")
 echo "Results: $OUT"
@@ -29,7 +29,7 @@ echo '== Lexer and parser'
 bison -d -o "$OUT/gen-parser/hidl-gen_y.cpp" "$H/hidl-gen_y.yy" 2>&1 | tail -5
 flex -o "$OUT/gen-parser/hidl-gen_l.cpp" "$H/hidl-gen_l.ll" 2>&1 | tail -5
 ls "$OUT/gen-parser"
-WANT=$(cd "$H" && grep -h -o -E '#include "hidl-gen_y[^"]*"' *.ll *.yy *.cpp *.h 2>/dev/null | sort -u | sed -E 's/#include "(.*)"/\1/')
+WANT=$(cd "$H" && grep -h -o -E '#include "hidl-gen_y[^"]*"' *.ll *.yy *.cpp *.h 2>/dev/null | sort -u | sed -E 's/#include "(.*)"/\1/' | grep -v helpers)
 echo "Parser header names the sources include: ${WANT:-none}"
 for h in $WANT; do
     for cand in "$OUT"/gen-parser/hidl-gen_y.hpp "$OUT"/gen-parser/hidl-gen_y.hh "$OUT"/gen-parser/hidl-gen_y.h; do
@@ -48,11 +48,15 @@ echo '== Sources: top level plus utils, host_utils, hashing, metadata'
     echo "$ROOT/asahi/liblog-host-shim.cpp shim_liblog"
 } > "$OUT/units.txt"
 echo "units: $(wc -l < "$OUT/units.txt")"
+echo '== Fetch libhwbinder headers (one tiny shallow clone; hidl-gen only reads transaction constants from IBinder.h)'
+BR=$(git -C "$SRC/system_tools_aidl" rev-parse --abbrev-ref HEAD 2>/dev/null); [[ -z $BR || $BR == HEAD ]] && BR=android16-release
+git clone -q --depth 1 --branch "$BR" https://android.googlesource.com/platform/system/libhwbinder "$OUT/system_libhwbinder" 2>&1 | tail -2
+ls "$OUT/system_libhwbinder/include/hwbinder/IBinder.h" 2>&1
 # Soong exports each library's include dirs; here every directory that holds a header goes on the path.
 IFL=; for d in $(find "$H" -type d -name include -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*') $(find "$H" -name '*.h' -not -path '*/test/*' -not -path '*/hidl2aidl/*' -not -path '*/c2hal/*' -not -path '*/lint/*' -printf '%h\n' | sort -u); do IFL="$IFL -I$d"; done
-FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$H -I$OUT/gen-parser $IFL -I$B/include -I$SRC/system_logging/liblog/include -I$SRC/system_core/libutils/include -I/usr/include/jsoncpp"
+FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$H -I$OUT/gen-parser $IFL -I$B/include -I$SRC/system_logging/liblog/include -I$SRC/system_core/libutils/include -I$OUT/system_libhwbinder/include -I/usr/include/jsoncpp"
 # cstdint is forced only for hidl-gen's own units; libbase units must see the headers in their own order.
-FLAGS_HIDL="$FLAGS -include cstdint"
+FLAGS_HIDL="$FLAGS -include cstdint -include cstring -include algorithm"
 export OUT FLAGS FLAGS_HIDL
 echo '== Compile (parallel)'
 xargs -P "$(nproc)" -L1 bash -c 'F=$FLAGS; case "$1" in base_*|shim_*) ;; *) F=$FLAGS_HIDL;; esac; clang++ $F -c "$0" -o "$OUT/obj/$1.o" >"$OUT/obj/$1.log" 2>&1 || echo "FAILED $1"' < "$OUT/units.txt"
