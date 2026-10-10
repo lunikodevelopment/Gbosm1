@@ -11,9 +11,29 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: decide how to test Android receiving an FD, using the scan result
-below. No probe command is queued yet because the scan found no single-purpose
-FD-reading program. Retain all earlier results; no completed probe needs rerunning.
+Next action: run the read-only servicemanager inspection below. Retain all
+earlier results; no completed probe needs rerunning.
+
+## One command: inspect the image's servicemanager (read-only)
+
+**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+
+Scope: creates one new `work/asahi/servicemanager-inspect-*` directory holding a
+copy of `/system/bin/servicemanager` (size-limited to 64 MiB), a strings-hints
+file and `summary.json`. The image is only read with `dump.erofs`; nothing is
+mounted or executed. Reversal: delete the newly printed result directory.
+
+Why: replacing the native stub context manager with the real `servicemanager`
+would cover the untested "real servicemanager" item and may give an Android
+process that can receive an FD. This step only shows its `DT_NEEDED` libraries
+and selected strings (properties, SELinux, VINTF and device-path hints) so we
+can tell what it needs before any run. The script is new and untested.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/inspect-servicemanager.py
+```
+
+Say **get logs** with the output.
 
 ## Completed scan: Binder-linked executables in the image
 
