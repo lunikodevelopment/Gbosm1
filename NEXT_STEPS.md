@@ -2181,7 +2181,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3g complete; stage 3h (donor check) is next
+## Graphics: stages 0, 1, 2 and 3a-3h complete; stage 3i (AOSP sources) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2219,33 +2219,57 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3h, are prebuilt minigbm binaries already here? (read only)
+### Next: Graphics stage 3i, fetch the AOSP sources and size the `aidl` build
 
-Stage 3g (below) shows building minigbm's allocator service and mapper from
-source needs a large part of AOSP. Before choosing a route, check what is
-already on this machine: the inherited VM port (`image/mica_graphics_port.py`)
-used prebuilt Cuttlefish arm64 binaries (`libminigbm_gralloc.so`,
-`libminigbm_gralloc4_utils.so`, `mapper.minigbm.so`, the allocator service,
-the V3/common AIDL libraries) read from `artifacts/graphics-port-review/`, and
-the checkout root has an untracked `artifacts/` directory. This step searches
-the checkout for them and reports ELF facts: architecture, 16 KiB load
-alignment, dependencies, which DRM driver name strings the gralloc library
-contains, and its `cros_gralloc_driver` symbols. If they are not here, the
-report says so and nothing else is assumed.
+Stage 3h (below) found no prebuilt donors, so the service and mapper have to be
+built from source, and that needs AOSP's `aidl` compiler to generate the C++
+(NDK backend) code for the allocator and graphics-common types, which the
+mapper also uses. This step fetches only the AOSP pieces involved, with sparse
+shallow clones from `android.googlesource.com` (`system/tools/aidl`,
+`system/libbase`, `hardware/interfaces` graphics and common, `frameworks/native`
+Binder NDK, `system/core` and `system/logging` headers, `hardware/libhardware`
+headers), on the `android16-release` branch if it exists, else `android15-release`,
+else `main`. It then prints what building `aidl` natively on Fedora would
+depend on: its source and library list, whether `bison`, `flex` and the usual
+development packages are installed, the AIDL files for the allocator and common
+types and the frozen allocator versions, the stable-C mapper headers, and the
+Binder NDK C++ headers the NDK sysroot lacks. It builds and runs nothing.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/gralloc-donors-*` directory holding only
-`report.txt`. Everything else is only read; nothing is downloaded, built or run.
-Delete the directory to reverse. Needs `binutils` (`readelf`, `strings`, `nm`),
-which the earlier stages already used.
+Creates one new `work/asahi/aosp-gralloc-src-*` directory with those clones
+(a few hundred MB at most, an estimate; the report prints the real size) and
+`report.txt`. Nothing is built, installed or run from them. Delete the
+directory to reverse. The AOSP sources are Apache-2.0 licensed; anything built
+from them keeps their notices and the report records the commits used.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/inspect-gralloc-donors.sh
+bash asahi/fetch-aosp-gralloc-sources.sh
 ```
 
-Send the printed `report.txt`.
+Send the printed `report.txt` (attach it; it is long). Alternative if building
+`aidl` natively turns out too deep: run the x86_64 `aidl` from the Android SDK
+build-tools under FEX, which Fedora Asahi packages. Not assessed yet.
+
+### Result: Graphics stage 3h, prebuilt minigbm donors (none present)
+
+Reported by the user from `work/asahi/gralloc-donors-G0sW70RY`:
+
+- No `libminigbm_gralloc.so`, `mapper.minigbm.so` or minigbm allocator service
+  exists in the checkout. The untracked `artifacts/` directory holds only
+  `mica-recovery.raw` (19230966272 bytes, the recovery image used by the audits),
+  not the Cuttlefish graphics files the inherited VM port read from
+  `artifacts/graphics-port-review/`.
+- What the search did find are the image's own files, extracted by another
+  thread into `work/asahi/android-root-7nqprryz/root`: `android.hardware.graphics.allocator-V2-ndk.so`
+  and the HIDL `allocator@2.0/3.0/4.0` libraries in `/system`, `/vendor` and the
+  swcodec APEX, and `/vendor/lib64/hw/gralloc.default.so`. These are the
+  image's, not minigbm donors.
+
+So route 2 (reuse prebuilt donors) is not available without fetching Cuttlefish
+build artifacts, which the inherited `fetch.sh` workflow does and which this
+runbook does not run.
 
 ### Result: Graphics stage 3g, allocator service and mapper sources (read, not built)
 
