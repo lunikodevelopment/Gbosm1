@@ -13,9 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 7b" below, then paste
-its output. Stage 7a (below) passed: five image HAL programs registered
-together.
+Next action: none for you right now. Stage 7b passed (below); the next stage
+waits on a direction decision in the thread.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -406,7 +405,7 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: stage 7b, call each registered HAL once and read two getters
+## Completed command: stage 7b, call each registered HAL once and read two getters
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -431,6 +430,20 @@ cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-p
 
 Wait for the prompt to return (about 40 seconds), then paste from
 `servicemanager-run` to the end.
+
+## Results: stage 7b (`real-servicemanager-oqsaxpof`)
+
+Operationally tested on the user's M1 (output read):
+- All five registered image programs (dumpstate, lights, oemlock, power.stats,
+  sensorscalibrate) answered the interface-descriptor call with their AIDL
+  descriptor over Binder through the image servicemanager and `service` CLI.
+- `lights` code 2 returned an empty reply parcel with status 0 (consistent with
+  `getLights` returning an empty list; there are no light devices in the private
+  root). `oemlock` code 1 returned status 0 and the string "Desktop OEMLock HAL"
+  (consistent with `getName`). The code-to-method mapping was from memory; the
+  replies fit it but do not prove it.
+- Denials this run: the same two servicemanager `/dev/__properties__` ones
+  (`open`, `map`); none for the five HALs.
 
 ## Results: stage 7a (`real-servicemanager-me3h5b6w`)
 
