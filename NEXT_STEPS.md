@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5o", below) and paste its output.
+bring-up stage B5p", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -971,21 +971,48 @@ Operationally tested on the M1:
   `/metadata` (27), `/data_mirror` (11) and `/cache` (4) paths. These are mount points
   on a device; nothing has failed on them yet.
 
-## Next action: bring-up stage B5o, cgroup subfolders and task-profile folders
+## Results: bring-up stage B5o (`root-smoke-uzmpuaqz`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5n: the
+- **Process groups passed** (operationally tested against the stand-in directories):
+  `libprocessgroup: Created cgroup /sys/fs/cgroup/system/uid_1000` and
+  `.../uid_1000/pid_164`. 30 cgroup folders were created from `cgroups.json` and 27
+  task-profile `JoinCgroup` actions.
+- system_server loaded its native library configuration (`nativeloader:
+  InitApexLibraries`), so the post-fork system-server hooks ran.
+- **Next stop: SELinux label.** `JNI FatalError ... Zygote.cpp:2217:
+  selinux_android_setcon(u:r:system_server:s0)`. In AOSP's
+  `com_android_internal_os_Zygote.cpp`, `selinux_android_setcontext()` runs first
+  and passed (it returns early when libselinux finds no selinuxfs, as here: `statfs
+  /sys/fs/selinux` ENOENT). The system_server-only `selinux_android_setcon()` call
+  that follows has no such check, so its write reaches the host's `/proc` attribute
+  file, where Fedora's policy rejects the Android label (inferred: the write itself
+  is not in the trace's syscall set).
+
+## Next action: bring-up stage B5p, stand-ins for setcon and the property service
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5o: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory (logs,
-trace); private tmpfs mounts on `/dev`, `/data`, `/mnt`, `/sys` and others take the rest
-and vanish at exit. Loss: none. Reversal: delete the printed directory. No sudo, no
-SELinux module, no binder device, no host sysfs or cgroup, no partition, boot or flash
-change.
+trace, and now a 1 KB stub library built there with Fedora's clang); private tmpfs
+mounts take the rest and vanish at exit. Loss: none. Reversal: delete the printed
+directory. No sudo, no SELinux module or policy change (the host stays enforcing), no
+binder device, no partition, boot or flash change.
 
-What changes: `asahi/replay-init-dirs.py` now also creates `<cgroup2 root>/system` and
-`/apps`, and one folder for every `JoinCgroup` action in the image's
-`task_profiles.json` files (for example `/dev/cpuset/foreground`), so task-profile
-moves of system_server's threads find their folders too. All remain stand-in
-directories. Expected: system_server passes `createProcessGroup` and reaches Java
-startup; its first binder use will be a separate step.
+What changes, both clearly test-only stand-ins:
+- `asahi/sandbox-setcon-shim.c`: a dependency-free library exporting
+  `selinux_android_setcon()` that returns success without writing, the same result
+  `selinux_android_setcontext()` already gives in this sandbox. zygote preloads it
+  with `LD_PRELOAD` from `/data/local/tmp/gbos/`. The run prints the linker
+  namespace's permitted paths so a refused preload is visible.
+- `asahi/sandbox-property-service.py`: listens on `/dev/socket/property_service`
+  (protocol 2, announced with `ro.property_service.version=2`) and writes set
+  requests into the property area in Bionic's layout and update order. Existing
+  `ro.*` values are refused as init does; `ctl.*` requests are logged but start
+  nothing. Every request is listed after the run. This is there because
+  system_server sets properties early in startup and treats a failed set as fatal.
+
+Expected: system_server passes the label switch, starts Java (`SystemServer`) and
+stops at its first binder use (servicemanager), which needs its own step. The new
+output sections list the property requests and the system_server log lines.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server

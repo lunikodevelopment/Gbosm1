@@ -33,7 +33,8 @@ PRELUDE = base.SCRIPT[:base.SCRIPT.index('say "S0')]
 SCRIPT = PRELUDE + r'''ZYG="$8"; WAIT="${9:-60}"; SS="${10:-}"
 say "S0 property area"
 "$PY" "$PROPS" "$ROOT" "$ROOT/dev/__properties__" logd.ready=true servicemanager.ready=true apexd.status=ready \
-  ro.logd.auditd=false ro.logd.kernel=false ro.boottime.init=1 sys.boot_completed=0 ro.zygote=zygote64 2>&1 | cut -c1-300
+  ro.logd.auditd=false ro.logd.kernel=false ro.boottime.init=1 sys.boot_completed=0 ro.zygote=zygote64 \
+  ro.property_service.version=2 2>&1 | cut -c1-300
 
 # directories Android's init.rc creates under /data before zygote starts (tmpfs here, gone at exit)
 mkdir -p "$ROOT/data/dalvik-cache/arm64" "$ROOT/data/misc" "$ROOT/data/system" "$ROOT/data/user/0" "$ROOT/data/user_de/0" \
@@ -50,9 +51,23 @@ if [ -d "$ROOT/sys" ]; then mount -t tmpfs -o mode=0755 tmpfs "$ROOT/sys" && ech
 say "S0b every mkdir and symlink of the image's init .rc files, replayed under the tmpfs mounts, plus cgroups.json paths"
 "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
+say "S0c stand-ins: property service socket, and the selinux_android_setcon stub for zygote"
+"$PY" "$(dirname "$ZYG")/sandbox-property-service.py" "$ROOT/dev/__properties__" "$ROOT/dev/socket/property_service" "$OUT/property-sets.log" &
+PROPPID=$!
+sleep 1
+ls -l "$ROOT/dev/socket/property_service" 2>&1 | cut -c1-120
+PREENV=()
+if [ -f "$OUT/libgbos-setcon-shim.so" ]; then
+  mkdir -p "$ROOT/data/local/tmp/gbos" && cp "$OUT/libgbos-setcon-shim.so" "$ROOT/data/local/tmp/gbos/"
+  PREENV=(LD_PRELOAD=/data/local/tmp/gbos/libgbos-setcon-shim.so)
+  echo "zygote will preload /data/local/tmp/gbos/libgbos-setcon-shim.so"
+else echo "NOTE: no setcon stub was built; system_server will stop at selinux_android_setcon again"; fi
+
 say "S1 linkerconfig first (no logd yet), then logd under the generated config"
 timeout 120 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig 2>&1 | head -n 5
 ls "$ROOT/linkerconfig" | wc -l
+echo "system section, default namespace permitted paths (the preloaded stub must be under one):"
+grep -n -A400 '^\[system\]' "$ROOT/linkerconfig/ld.config.txt" 2>/dev/null | grep -m 6 'namespace.default.permitted.paths' | cut -c1-160
 "$PY" "$SELF" --launch "$ROOT" > "$OUT/logd.out" 2>&1 &
 LOGDPID=$!
 sleep 3
@@ -68,10 +83,10 @@ echo "classpath variables: $(printf '%s ' "${CPENV[@]%%=*}")"
 say "S2b what path the kernel reports for open files after pivot_root (zygote's fd allowlist compares these)"
 timeout 30 "$PY" "$ZYG" --probe-paths "$ROOT" 2>&1 | cut -c1-220
 
-say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
+say "S3 zygote: app_process64 -Xzygote --zygote ${SS}, up to ${WAIT}s, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
 if command -v strace >/dev/null 2>&1; then TR=(strace -f -s 160 -e 'trace=%file,%network,setgroups,setresuid,setresgid,setuid,setgid,capset,prctl,unshare,mount,setns,seccomp,setpriority,dup,dup2,dup3,open_tree,fsopen,fspick,fcntl,eventfd2,memfd_create,epoll_create1,open_by_handle_at' -o "$OUT/zygote.trace"); else TR=(); fi
-"${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
+"${TR[@]}" "$PY" "$ZYG" --launch-zygote "$ROOT" "${BASEENV[@]}" "${CPENV[@]}" "${PREENV[@]}" $SS > "$OUT/zygote.out" 2>&1 &
 ZPID=$!
 ( while kill -0 "$ZPID" 2>/dev/null; do
     find "$ROOT"/proc/[0-9]*/fd -maxdepth 1 -lname / -printf '%p\n' 2>/dev/null > "$OUT/rootfd.tmp"
@@ -108,7 +123,11 @@ if [ -s "$OUT/zygote.trace" ]; then
   grep -E '= -1 E' "$OUT/zygote.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'PR_SET_VMA|/proc/self|ld.so.preload|SO_DOMAIN|/mnt/expand|resource-cache|/sys/devices/system/cpu|trace_marker|qgl_config|statsdw' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 30
   echo "--- last 10 trace lines:"; tail -n 10 "$OUT/zygote.trace" | cut -c1-200
 fi
-pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" 2>/dev/null
+echo "--- property set requests the stand-in received (first 40 of $(wc -l < "$OUT/property-sets.log" 2>/dev/null)):"
+head -n 41 "$OUT/property-sets.log" 2>/dev/null | cut -c1-200
+echo "--- system_server lines in logcat (last 25):"
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' (SystemServer|SystemServiceManager|ServiceManager|system_server|Looper|ActivityManager|PackageManager)' | grep -v 'runtime.cc:769' | tail -n 25 | cut -c1-260
+pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" 2>/dev/null
 echo; echo "steps finished"
 '''
 
@@ -237,6 +256,14 @@ def main():
     print("(script, logs, a trace of file and network calls, perhaps tens of MB). The tree is mounted read-only during the run;")
     print("tmpfs mounts hold everything else and vanish at exit. Delete the directory to reverse.")
     out = Path(tempfile.mkdtemp(prefix="root-smoke-", dir="work/asahi")).resolve()
+    shim = out / "libgbos-setcon-shim.so"
+    if shutil.which("clang") and shutil.which("ld.lld"):
+        built = subprocess.run(["clang", "--target=aarch64-linux-android35", "-shared", "-nostdlib", "-fPIC", "-O2",
+                                "-fuse-ld=lld", "-Wl,-z,max-page-size=16384", "-Wl,-soname,libgbos-setcon-shim.so",
+                                str(HERE / "sandbox-setcon-shim.c"), "-o", str(shim)], capture_output=True, text=True)
+        print(f"setcon stub build exit status: {built.returncode} {built.stderr.strip()[:300]}")
+    else:
+        print("NOTE: clang or ld.lld missing; the setcon stub is not built")
     script = out / "run.sh"
     script.write_text(SCRIPT)
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
