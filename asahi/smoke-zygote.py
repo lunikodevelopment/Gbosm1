@@ -13,6 +13,9 @@ the property area, the logd launcher and the apex info list). New here:
   resource preload and the socket listen only. Output of the process, the log and a
   trace of file and network calls are shown; the process is stopped after a time limit.
 Nothing outside the tree's tmpfs mounts and the result directory is written.
+With --binder (stage B6a, approved by the user) the run also installs the temporary
+gbos_binder_probe SELinux module (one permissive domain; Fedora stays enforcing), mounts a
+private binderfs and starts the image's servicemanager in that domain, then removes the module.
 """
 import importlib.util
 import os
@@ -30,7 +33,7 @@ spec.loader.exec_module(base)
 
 PRELUDE = base.SCRIPT[:base.SCRIPT.index('say "S0')]
 
-SCRIPT = PRELUDE + r'''ZYG="$8"; WAIT="${9:-60}"; SS="${10:-}"
+SCRIPT = PRELUDE + r'''ZYG="$8"; WAIT="${9:-60}"; SS="${10:-}"; SMCTX="${11:-}"; SMENTRY="${12:-}"
 say "S0 property area"
 "$PY" "$PROPS" "$ROOT" "$ROOT/dev/__properties__" logd.ready=true servicemanager.ready=true apexd.status=ready \
   ro.logd.auditd=false ro.logd.kernel=false ro.boottime.init=1 sys.boot_completed=0 ro.zygote=zygote64 \
@@ -73,6 +76,23 @@ LOGDPID=$!
 sleep 3
 if kill -0 "$LOGDPID" 2>/dev/null; then echo "logd still running"; else echo "logd EXITED"; fi
 head -n 6 "$OUT/logd.out" | cut -c1-200
+
+SMPID=""
+if [ -n "$SMCTX" ]; then
+  say "S1b private binderfs (binder, hwbinder, vndbinder) and the image's servicemanager in the temporary domain"
+  mkdir -p "$ROOT/dev/binderfs"
+  if mount -t binder binder "$ROOT/dev/binderfs" 2>&1; then
+    "$PY" "$ZYG" --binderfs-devices "$ROOT/dev/binderfs" binder hwbinder vndbinder 2>&1
+    for n in binder hwbinder vndbinder; do [ -e "$ROOT/dev/$n" ] || [ -L "$ROOT/dev/$n" ] || ln -s "/dev/binderfs/$n" "$ROOT/dev/$n"; done
+    ls -l "$ROOT/dev/binder" "$ROOT/dev/hwbinder" "$ROOT/dev/vndbinder" 2>&1 | sed "s#$ROOT##" | cut -c1-140
+    "$PY" "$ZYG" --launch-servicemanager "$ROOT" "$SMCTX" "$SMENTRY" "${BASEENV[@]}" > "$OUT/servicemanager.out" 2>&1 &
+    SMPID=$!
+    sleep 3
+    if kill -0 "$SMPID" 2>/dev/null; then echo "servicemanager still running"; else echo "servicemanager EXITED"; fi
+    head -n 10 "$OUT/servicemanager.out" | cut -c1-220
+    echo "servicemanager domain: $(cat "$ROOT"/proc/[0-9]*/attr/current 2>/dev/null | tr '\0' '\n' | grep -m1 gbos_binder_probe_t || echo 'not seen')"
+  else echo "binderfs mount FAILED"; fi
+fi
 
 say "S2 derive_classpath"
 inroot /apex/com.android.sdkext/bin/derive_classpath /data/system/environ/classpath | head -n 5
@@ -126,8 +146,8 @@ fi
 echo "--- property set requests the stand-in received (first 40 of $(wc -l < "$OUT/property-sets.log" 2>/dev/null)):"
 head -n 41 "$OUT/property-sets.log" 2>/dev/null | cut -c1-200
 echo "--- system_server lines in logcat (last 25):"
-timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' (SystemServer|SystemServiceManager|ServiceManager|system_server|Looper|ActivityManager|PackageManager)' | grep -v 'runtime.cc:769' | tail -n 25 | cut -c1-260
-pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" 2>/dev/null
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' (SystemServer|SystemServiceManager|ServiceManager|servicemanager|system_server|Looper|ActivityManager|PackageManager)' | grep -v 'runtime.cc:769' | tail -n 25 | cut -c1-260
+pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID 2>/dev/null
 echo; echo "steps finished"
 '''
 
@@ -196,6 +216,58 @@ def keep_namespace_alive():
             signal.pause()
 
 
+def binderfs_devices(path, names):
+    """Create binder devices in a binderfs mount (BINDER_CTL_ADD on binder-control), as Android's init does."""
+    import fcntl
+    import struct
+    control = os.open(f"{path}/binder-control", os.O_RDWR | os.O_CLOEXEC)
+    for name in names:
+        request = bytearray(name.encode().ljust(256, b"\0") + bytes(8))  # struct binderfs_device: name[256], major, minor
+        try:
+            fcntl.ioctl(control, 0xC1086201, request, True)  # _IOWR('b', 1, struct binderfs_device)
+            major, minor = struct.unpack_from("<II", request, 256)
+            print(f"binderfs device {name}: {major}:{minor}", flush=True)
+        except OSError as error:
+            print(f"binderfs device {name}: FAILED {error}", flush=True)
+    os.close(control)
+
+
+def launch_servicemanager(root, context, entry, env_items):
+    """Start the image's servicemanager in the temporary gbos_binder_probe_t domain, in its own mount namespace.
+
+    Same arrangement as the earlier real-servicemanager probes (probe-servicemanager.c): the host's
+    selinuxfs is visible to servicemanager only, and the domain is entered on exec of a file
+    labelled gbos_binder_probe_exec_t. That file is a copy of the image's own servicemanager,
+    bind-mounted over /system/bin/servicemanager in this namespace only, so the linker sees the
+    usual path. The exec context is set through /proc/self/attr/exec, as runcon does.
+    """
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    def mount(source, target, fstype, flags):
+        if libc.mount(source and source.encode(), target.encode(), fstype and fstype.encode(), flags, None) != 0:
+            raise OSError(ctypes.get_errno(), f"mount {target}")
+    os.unshare(os.CLONE_NEWNS)
+    mount(None, "/", None, 0x4000 | 0x40000)  # MS_REC | MS_PRIVATE
+    mount(entry, f"{root}/system/bin/servicemanager", None, 0x1000)  # MS_BIND
+    mount("tmpfs", f"{root}/sys", "tmpfs", 0)
+    os.makedirs(f"{root}/sys/fs/selinux")
+    mount("/sys/fs/selinux", f"{root}/sys/fs/selinux", None, 0x1000)
+    os.chroot(root)
+    os.chdir("/")
+    for number in sorted(int(n) for n in os.listdir("/proc/self/fd")):
+        if number > 2:
+            try:
+                os.close(number)
+            except OSError:
+                pass
+    with open("/proc/self/attr/exec", "w") as attr:
+        attr.write(context)
+    print(f"exec context set to {context}", flush=True)
+    env = dict(item.split("=", 1) for item in env_items)
+    os.execve("/system/bin/servicemanager", ["servicemanager"], env)
+
+
 def launch_zygote(root, env_items):
     enter_root(root)
     sockets = Path("/dev/socket")
@@ -233,16 +305,81 @@ def launch_zygote(root, env_items):
     os.execve("/system/bin/app_process64", argv, env)
 
 
+def prepare_binder_policy(root, out):
+    """Install the temporary gbos_binder_probe module (permissive domain only) and label the servicemanager entry copy.
+
+    Approved by the user for stage B6a. Same module name, template and permissive-domain
+    arrangement as probe-binder.py --permissive. The rules beyond the template are the binder
+    permissions the earlier real-servicemanager runs needed between unconfined processes and that
+    domain (see the comments in probe-binder.py).
+    """
+    for tool in ("sudo", "semodule", "chcon", "ausearch"):
+        if not shutil.which(tool):
+            sys.exit(f"{tool} is missing; nothing was installed")
+    if Path("/sys/fs/selinux/enforce").read_text().strip() != "1":
+        sys.exit("requires SELinux enforcing; no enforcement change will be made")
+    current = Path("/proc/self/attr/current").read_text().strip("\0\n ")
+    parts = current.split(":")
+    if len(parts) < 4 or parts[2] != "unconfined_t":
+        sys.exit(f"expected an unconfined_t session, found {current}; nothing was installed")
+    context = ":".join(parts[:2] + ["gbos_binder_probe_t"] + parts[3:])
+    modules = subprocess.run(["sudo", "semodule", "-l"], capture_output=True, text=True)
+    if modules.returncode or any(line.split()[:1] == ["gbos_binder_probe"] for line in modules.stdout.splitlines()):
+        sys.exit("cannot list modules, or gbos_binder_probe already exists (left as is); nothing was installed")
+    entry = out / "servicemanager-entry"
+    shutil.copy2(root / "system/bin/servicemanager", entry)
+    entry.chmod(0o755)
+    rules = ["(typepermissive gbos_binder_probe_t)",
+             "(allow unconfined_t gbos_binder_probe_t (binder (call transfer)))",
+             "(allow gbos_binder_probe_t unconfined_t (binder (call transfer)))",
+             "(allow unconfined_t unconfined_t (binder (call transfer)))"]
+    policy = out / "gbos_binder_probe.cil"
+    policy.write_text((HERE / "binder-probe-policy.cil.in").read_text() + "\n".join(rules) + "\n")
+    print("Installing the temporary gbos_binder_probe module (sudo may ask for your password)", flush=True)
+    if subprocess.run(["sudo", "semodule", "-i", str(policy)]).returncode:
+        sys.exit("policy installation failed; nothing else was changed")
+    if subprocess.run(["sudo", "chcon", "-t", "gbos_binder_probe_exec_t", str(entry)]).returncode:
+        remove_binder_policy(out, entry)
+        sys.exit("labelling the servicemanager copy failed; module removed")
+    print(f"module installed; servicemanager copy labelled; exec context {context}", flush=True)
+    return context, entry
+
+
+def remove_binder_policy(out, entry):
+    import re
+    if entry and entry.exists():
+        entry.unlink()
+    removed = subprocess.run(["sudo", "semodule", "-r", "gbos_binder_probe"], capture_output=True, text=True)
+    print(f"temporary module removed: {'yes' if removed.returncode == 0 else 'NO, run: sudo semodule -r gbos_binder_probe'}", flush=True)
+    audit = subprocess.run(["sudo", "ausearch", "-m", "AVC,USER_AVC", "-ts", "recent", "-i"], capture_output=True, text=True)
+    (out / "denials.txt").write_text(audit.stdout)
+    seen = {}
+    for line in audit.stdout.splitlines():
+        if "avc:" in line and ("gbos_binder_probe" in line or "tclass=binder" in line):
+            short = re.sub(r"^.*avc:\s+", "", line)
+            short = re.sub(r" pid=\d+| ino=\d+| dev=\S+| path=\S+", "", short)
+            seen[short] = seen.get(short, 0) + 1
+    print(f"--- SELinux denials in the last 10 minutes for the temporary domain or binder ({len(seen)} distinct; all in {out / 'denials.txt'}):")
+    for short, count in list(seen.items())[:25]:
+        print(f"{count:4d} {short[:300]}")
+
+
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--probe-paths":
         probe_paths(sys.argv[2])
         return
     if len(sys.argv) >= 3 and sys.argv[1] == "--launch-zygote":
         launch_zygote(sys.argv[2], sys.argv[3:])
+    if len(sys.argv) >= 3 and sys.argv[1] == "--binderfs-devices":
+        binderfs_devices(sys.argv[2], sys.argv[3:])
+        return
+    if len(sys.argv) >= 5 and sys.argv[1] == "--launch-servicemanager":
+        launch_servicemanager(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:])
     if os.geteuid() == 0:
         sys.exit("run as your ordinary user, without sudo")
-    system_server = "--system-server" in sys.argv[1:]
-    print("=== BRING-UP THREAD, STAGE " + ("B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
+    binder = "--binder" in sys.argv[1:]
+    system_server = binder or "--system-server" in sys.argv[1:]
+    print("=== BRING-UP THREAD, STAGE " + ("B6a" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")
@@ -266,15 +403,24 @@ def main():
         print("NOTE: clang or ld.lld missing; the setcon stub is not built")
     script = out / "run.sh"
     script.write_text(SCRIPT)
+    smctx, entry, installed = "", None, False
+    if binder:
+        smctx, entry = prepare_binder_policy(root, out)
+        installed = True
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
                "bash", str(script), str(root), str(out), shutil.which("python3") or "python3",
                str((HERE / "smoke-logd-art.py")), str(HERE / "make-property-area.py"),
-               str(HERE / "elf-needed.py"), str(HERE / "make-apex-info-list.py"), str(Path(__file__).resolve()), "45", "--start-system-server" if system_server else ""]
-    done = subprocess.run(command, capture_output=True, text=True, timeout=900)
-    text = done.stdout + done.stderr
-    (out / "log.txt").write_text(text)
-    print(text)
-    print(f"namespace run exit status: {done.returncode}")
+               str(HERE / "elf-needed.py"), str(HERE / "make-apex-info-list.py"), str(Path(__file__).resolve()), "45",
+               "--start-system-server" if system_server else "", smctx, str(entry or "")]
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=900)
+        text = done.stdout + done.stderr
+        (out / "log.txt").write_text(text)
+        print(text)
+        print(f"namespace run exit status: {done.returncode}")
+    finally:
+        if installed:
+            remove_binder_policy(out, entry)
     print(f"Send the terminal output above (log and trace: {out})")
 
 

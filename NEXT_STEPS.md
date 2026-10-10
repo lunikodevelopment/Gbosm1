@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6a (needs your approval)", below) and paste its output.
+bring-up stage B6a", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1001,17 +1001,45 @@ Operationally tested on the M1:
 - The property-service stand-in ran; the only request received was `logd.ready=true`
   (from logd). system_server stopped before setting any property.
 
-## Next action: bring-up stage B6a, Binder and the real servicemanager in the zygote sandbox (needs your approval)
+## Next action: bring-up stage B6a, Binder and the real servicemanager in the zygote sandbox
 
-Not yet published as a command. It would combine this sandbox with the arrangement of
-the completed real-servicemanager stages (5-8): a private binderfs with `binder`,
-`hwbinder` and `vndbinder`, and the image's own servicemanager started in the
-temporary `gbos_binder_probe_t` domain. That means installing the same temporary
-`gbos_binder_probe` SELinux module with `sudo semodule -i`, permissive for that one
-domain only, plus binder `call`/`transfer` between unconfined processes and that
-domain. Fedora stays enforcing; the run removes the module at the end. It is a host
-policy change, so it waits for an explicit yes in the "Remaining steps to boot
-Android" thread.
+Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
+October 2026).
+
+**THIS STEP MODIFIES STORAGE.** Scope:
+- One new `work/asahi/root-smoke-*` directory (logs, trace, stub, policy file, a copy of
+  the image's servicemanager that is labelled and then deleted) and the rewritten
+  `apex/apex-info-list.xml`, as in B5p.
+- **Host SELinux policy, temporarily:** `sudo semodule -i` installs the
+  `gbos_binder_probe` module (the template of the completed real-servicemanager stages):
+  only `gbos_binder_probe_t` is permissive, plus binder `call`/`transfer` between
+  `unconfined_t` and that domain and within `unconfined_t`. `sudo chcon` labels the
+  servicemanager copy `gbos_binder_probe_exec_t`. Fedora stays enforcing. The run refuses
+  to start if a module of that name already exists.
+- Private binderfs and tmpfs mounts vanish with the namespace.
+
+Possible loss: none. Reversal: the run deletes the labelled copy and runs `sudo semodule
+-r gbos_binder_probe` itself, even after a failure, and prints whether that worked. If it
+was interrupted, run `sudo semodule -r gbos_binder_probe`, then delete the printed
+directory. No partition, boot, flash or enforcement change; no host device beyond the
+private binderfs.
+
+What happens: as in B5p, plus S1b: binderfs mounted at `/dev/binderfs` in the tree with
+devices `binder`, `hwbinder` and `vndbinder` (linked from `/dev/binder` etc.), then the
+image's servicemanager starts in its own mount namespace with the host's selinuxfs
+visible to it only (as in stages 5-8) and enters `gbos_binder_probe_t` on exec. Then
+zygote and system_server start as before. Afterwards the run removes the module and
+prints the distinct denials for that domain or binder. Expected: system_server opens
+Binder, finds servicemanager and continues into `SystemServer` startup until the next
+missing piece.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --binder
+```
+
+sudo asks for your password once or twice. Its first line reads `=== BRING-UP THREAD,
+STAGE B6a`. Paste only the command output (not the prompt line) into this thread,
+"Remaining steps to boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 
