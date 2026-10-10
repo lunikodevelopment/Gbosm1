@@ -324,6 +324,22 @@ are the old 21:42:39 ones). The list client failed before connecting:
 mode's runtime. The extraction now copies it (and adds its libraries to the
 closure). No Binder exchange between the two Android processes has happened yet.
 
+### Second 5b run: the client waited for `servicemanager.ready`
+
+Reported by the user (`work/asahi/real-servicemanager-mv3v29jr`; launcher exit 0,
+cleanup 0, no new AVC denials). The copied `service` started under the extracted
+linker and `libbinder` logged `libbinder.BackendUnifiedServiceManager: Waited for
+servicemanager.ready for a second, waiting another...` until the launcher's
+ten-second limit (`LIST_CLIENT=timed out after ten seconds`, no output). The
+real `servicemanager` is expected to set that property through the property
+service (`/dev/socket/property_service`, absent here: ENOENT in its trace), so
+nothing ever set it. This is the property-service gap named in plan stage 4, now
+seen. Change: when `--list-client` is used, the launcher publishes the same
+private, immutable one-property fixture (`servicemanager.ready=true`) that the
+earlier Android probes used, just before starting the client. This is a stand-in
+for the property service, not Android init, and it is stated here so a pass is
+not read as more than it is.
+
 ## Run now: stage 5b, the image's `service list` against the real servicemanager
 
 **THIS STEP MODIFIES STORAGE**
