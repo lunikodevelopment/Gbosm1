@@ -2477,6 +2477,15 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-hidl-gen-host.sh
 ```
 
+Fourth run (reported): all 58 units compiled; the link failed only because
+`metadata/parser.cpp` is a separate tool with its own `main` (now excluded).
+Same rerun lines:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-hidl-gen-host.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3l, HIDL and gralloctypes dependencies

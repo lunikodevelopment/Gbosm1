@@ -40,7 +40,7 @@ echo '== Sources: top level plus utils, host_utils, hashing, metadata'
 {
     for f in "$H"/*.cpp; do echo "$f hidl_$(basename "${f%.cpp}")"; done
     for d in utils host_utils hashing metadata; do
-        for f in "$H"/$d/*.cpp; do [[ -e $f && $f != */test.cpp && $f != *_test.cpp ]] && echo "$f hidl_${d}_$(basename "${f%.cpp}")"; done
+        for f in "$H"/$d/*.cpp; do [[ -e $f && $f != */test.cpp && $f != *_test.cpp && $f != */metadata/parser.cpp ]] && echo "$f hidl_${d}_$(basename "${f%.cpp}")"; done
     done
     for s in hidl-gen_y hidl-gen_l; do echo "$OUT/gen-parser/$s.cpp gen_$s"; done
     for s in abi_compatibility chrono_utils cmsg file hex logging mapped_file parsebool parsenetaddress posix_strerror_r process result stringprintf strings threads errors_unix; do
