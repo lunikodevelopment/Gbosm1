@@ -13,8 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 5c" below, then say
-**get logs**.
+Next action: none for you yet. Stage 5c passed (see "Third 5c run" below); the
+next stage is proposed there and waits for your go-ahead.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -373,6 +373,37 @@ Reported by the user (`work/asahi/real-servicemanager-2jwv26rg`; cleanup 0/0):
   transaction to the endpoint was refused; I infer that this made the CLI report the
   service as missing, not yet confirmed. Change: the temporary module also allows
   `binder call` from `unconfined_t` to `unconfined_t` in this mode. Rerun.
+
+### Third 5c run: Android client, real servicemanager and native endpoint passed (milestone)
+
+Reported by the user (`work/asahi/real-servicemanager-3rm97p03`; launcher exit 0,
+cleanup 0/0). All required markers appeared: `REGISTER_REPLY bytes=4 status=0`,
+`REGISTER_SERVICE=PASS`, `ANDROID_OBJECT_READ=PASS`, `ANDROID_FD_WRITE=PASS`,
+`PARCEL_ENDPOINT_REPLY=PASS`, `REGISTER_PARCEL_CLIENT=exit status 0`,
+`REGISTER_ENDPOINT=exit status 0`, and the client printed
+`Result: Parcel( 47504231 00004000 ...)` (`REGISTER_RECEIPT_VERIFIED=True`).
+
+Operationally tested: the image's real `servicemanager` accepted a native
+endpoint's `addService`; the image's `service` CLI found it through that
+servicemanager, received the returned Binder object, called it, and sent an
+outgoing sealed read-only memfd that the endpoint verified (16384 bytes) before
+replying with the receipt. This is the earlier Parcel milestone with the stand-in
+lookup replaced by the real servicemanager.
+
+New AVC in this run: only the stale ones plus two `{ open }` on `/dev/__properties__`
+for the servicemanager domain at 22:00:28 (its libc cannot read the property
+file; no effect observed). Not changed.
+
+Limits: the property file is my stand-in for the property service; service_manager
+access checks are only observed as unknown class allowed by `deny_unknown`;
+`gbos.parcel` was accepted by whatever `service_contexts` matching the image
+performs (not examined further); no HAL or Android-side Binder server was run.
+
+Proposed next stage (not started, needs your go-ahead): reverse the direction,
+an Android-built Binder server registering with the real servicemanager (the
+image has no suitable test service, so this needs either an existing image
+service that can run alone or a minimal client I would have to build, which
+I will check before proposing a design), then Android receiving an FD.
 
 ## Run now: stage 5c, a native endpoint registers through the real `addService`
 
