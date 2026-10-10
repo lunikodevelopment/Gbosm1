@@ -356,6 +356,24 @@ request never reached the servicemanager's name checks, so whether
 are still untested. Change: the temporary module also allows `binder transfer`
 from `unconfined_t` to `gbos_binder_probe_t` in this mode. Rerun the same command.
 
+### Second 5c run: real `addService` accepted; the client's call was denied (SELinux)
+
+Reported by the user (`work/asahi/real-servicemanager-2jwv26rg`; cleanup 0/0):
+- Operationally tested: the native endpoint's `addService` for `gbos.parcel` was
+  accepted by the image's real servicemanager (`REGISTER_REPLY bytes=4 status=0`).
+  So the request layout and the name check passed in this image (the lookup in
+  `service_contexts` did not refuse it).
+- The image's `service call gbos.parcel ...` then exited 10 with `Service gbos.parcel
+  does not exist`. Its trace shows libbinder obtaining the binder from the lookup
+  ("Cannot cache binder as linkToDeath cannot be implemented. serviceName:
+  gbos.parcel", a log line with thread pool size 0), then giving up.
+- New AVC in this run (21:59:13.441; the earlier entries are stale): `{ call }` binder
+  from `unconfined_t` (the client, `linker64`) to `unconfined_t` (the endpoint).
+  A call between two unconfined processes is denied here, so the client's first
+  transaction to the endpoint was refused; I infer that this made the CLI report the
+  service as missing, not yet confirmed. Change: the temporary module also allows
+  `binder call` from `unconfined_t` to `unconfined_t` in this mode. Rerun.
+
 ## Run now: stage 5c, a native endpoint registers through the real `addService`
 
 **THIS STEP MODIFIES STORAGE**
