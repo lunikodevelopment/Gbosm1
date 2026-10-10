@@ -140,7 +140,8 @@ static void parcel_verify_fd(int fd) {
     for (size_t i = 0; i < sizeof(data); i++) require(data[i] == parcel_byte(i), "Android Parcel FD read differs");
     puts("ANDROID_FD_WRITE=PASS: Android Parcel delivered a read-only sealed FD with verified 16384-byte contents.");
 }
-static void parcel_server(const char *path, int ready) {
+static void parcel_loop(struct connection c, int registered);
+__attribute__((unused)) static void parcel_server(const char *path, int ready) {
     alarm(20);
     struct connection c = connect_device(path);
     struct flat_binder_object manager = {0}; manager.hdr.type = BINDER_TYPE_BINDER;
@@ -148,7 +149,79 @@ static void parcel_server(const char *path, int ready) {
     if (ioctl(c.fd, BINDER_SET_CONTEXT_MGR_EXT, &manager)) fail("Parcel BINDER_SET_CONTEXT_MGR_EXT");
     uint32_t enter = BC_ENTER_LOOPER; exchange(c.fd, &enter, 4, NULL, 0);
     require(write(ready, "R", 1) == 1, "Parcel endpoint readiness failed"); close(ready);
-    int looked_up = 0, described = 0;
+    parcel_loop(c, 0);
+}
+/* registered != 0: the image's real servicemanager already exists. This process
+ * registers the endpoint through the real addService (IServiceManager code 5 in
+ * this image: getService, getService2, checkService, checkService2, addService,
+ * listServices = 1..6, matching the observed checkService2=4 and listServices=6)
+ * and then serves only the endpoint object; the real servicemanager answers the
+ * client's lookup. Wire format: Parcel.cpp writeInterfaceToken (strict-mode word,
+ * work-source word, 'SYST'), @utf8InCpp name as String16-format, strong binder
+ * with the stability word that finishFlattenBinder appends, bool, dump priority. */
+__attribute__((unused)) static void parcel_registered_server(const char *path, int ready) {
+    alarm(20);
+    struct connection c = connect_device(path);
+    unsigned char data[256] = {0}; size_t length = 0;
+    int32_t strict = (int32_t)0x80000000u, work_source = -1, header = 0x53595354;
+    memcpy(data, &strict, 4); memcpy(data + 4, &work_source, 4); memcpy(data + 8, &header, 4);
+    length = 12 + encode_string(data + 12, "android.os.IServiceManager");
+    length += encode_string(data + length, "gbos.parcel");
+    binder_size_t object_offset = length;
+    struct flat_binder_object object = {0}; object.hdr.type = BINDER_TYPE_BINDER;
+    object.flags = FLAT_BINDER_FLAG_ACCEPTS_FDS; object.binder = parcel_object; object.cookie = parcel_cookie;
+    memcpy(data + length, &object, sizeof(object)); length += sizeof(object);
+    int32_t stability = 12, allow_isolated = 0, dump_priority = 8;
+    memcpy(data + length, &stability, 4); memcpy(data + length + 4, &allow_isolated, 4);
+    memcpy(data + length + 8, &dump_priority, 4); length += 12;
+    uint32_t enter = BC_ENTER_LOOPER; exchange(c.fd, &enter, 4, NULL, 0);
+    struct binder_transaction_data call = {0};
+    call.target.handle = 0; call.code = 5; call.data_size = length; call.data.ptr.buffer = (uintptr_t)data;
+    call.offsets_size = sizeof(object_offset); call.data.ptr.offsets = (uintptr_t)&object_offset;
+    transaction_command(c.fd, BC_TRANSACTION, &call);
+    for (int done = 0; !done;) {
+        unsigned char buf[4096];
+        size_t size = exchange(c.fd, NULL, 0, buf, sizeof(buf));
+        for (size_t pos = 0; pos < size;) {
+            uint32_t cmd;
+            require(size - pos >= 4, "truncated addService return command");
+            memcpy(&cmd, buf + pos, 4); pos += 4;
+            size_t n = _IOC_SIZE(cmd);
+            require(n <= size - pos, "truncated addService return payload");
+            if (cmd == BR_REPLY) {
+                struct binder_transaction_data reply;
+                require(n == sizeof(reply), "unexpected addService reply layout");
+                memcpy(&reply, buf + pos, n);
+                parcel_range(c, reply.data.ptr.buffer, reply.data_size);
+                int32_t status = -1;
+                if (reply.data_size >= 4) memcpy(&status, (void *)(uintptr_t)reply.data.ptr.buffer, 4);
+                printf("REGISTER_REPLY bytes=%llu status=%d\n", (unsigned long long)reply.data_size, status);
+                free_buffer(c.fd, reply.data.ptr.buffer);
+                require(reply.data_size >= 4 && status == 0, "real servicemanager refused addService; see REGISTER_REPLY");
+                done = 1;
+            } else if (cmd == BR_INCREFS || cmd == BR_ACQUIRE) {
+                struct binder_ptr_cookie cookie;
+                require(n == sizeof(cookie), "unexpected Android object reference layout");
+                memcpy(&cookie, buf + pos, n);
+                uint32_t ack = cmd == BR_INCREFS ? BC_INCREFS_DONE : BC_ACQUIRE_DONE;
+                unsigned char stream[4 + sizeof(cookie)];
+                memcpy(stream, &ack, 4); memcpy(stream + 4, &cookie, sizeof(cookie));
+                exchange(c.fd, stream, sizeof(stream), NULL, 0);
+            } else {
+                if (cmd == BR_FAILED_REPLY || cmd == BR_DEAD_REPLY || cmd == BR_ERROR)
+                    fprintf(stderr, "REGISTER_DRIVER_ERROR command=0x%x\n", cmd);
+                require(cmd == BR_NOOP || cmd == BR_TRANSACTION_COMPLETE || cmd == BR_SPAWN_LOOPER,
+                        "unsupported addService return command");
+            }
+            pos += n;
+        }
+    }
+    puts("REGISTER_SERVICE=PASS: native endpoint registered as gbos.parcel through the image's real servicemanager addService.");
+    require(write(ready, "R", 1) == 1, "Parcel endpoint readiness failed"); close(ready);
+    parcel_loop(c, 1);
+}
+static void parcel_loop(struct connection c, int registered) {
+    int looked_up = registered, described = 0;
     for (unsigned count = 0; count < 12; count++) {
         struct binder_transaction_data request = parcel_receive(c);
         unsigned char response[256] = {0}; size_t length = 0;
@@ -156,7 +229,7 @@ static void parcel_server(const char *path, int ready) {
         int received_fd = -1, completed = 0;
         const unsigned char *data = (void *)(uintptr_t)request.data.ptr.buffer;
         int endpoint = request.target.ptr == parcel_object && request.cookie == parcel_cookie;
-        require(endpoint || (request.target.ptr == 0 && request.cookie == 0), "unknown Parcel target object");
+        require(endpoint || (!registered && request.target.ptr == 0 && request.cookie == 0), "unknown Parcel target object");
         if (request.code == 0x5f504e47) {
             require(request.data_size == 0 && request.offsets_size == 0, "unexpected ping payload"); length = 4;
         } else if (request.code == 0x5f4e5446) {

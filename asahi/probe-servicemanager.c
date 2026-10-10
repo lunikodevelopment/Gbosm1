@@ -5,67 +5,15 @@
  * linker inside a private chroot and records what happens; it implements no
  * service manager behavior and intercepts no API.
  */
-#define main native_echo_main
-#include "probe-binder.c"
-#undef main
-#include <sys/stat.h>
+#define GBOS_NO_MAIN 1 /* this file supplies main; the property fixture, Binder helpers and the Parcel endpoint come from the includes */
+#include "probe-android-parcel.c"
 
-/* Immutable, single-property fixture for Bionic's ContextsPreSplit reader.
- * Layout reference: platform/bionic revision
- * 731631f300090436d7f5df80d50b6275c8c60a93,
- * libc/system_properties/{prop_area.cpp,
- * include/system_properties/prop_area.h,include/system_properties/prop_info.h}.
- * The wire format is versioned; it is not a text build.prop file. No Android
- * property service or property API interposition is used by this probe.
- */
-static void stub_ready_property(void) {
-    enum { AREA_BYTES = 128 * 1024, HEADER_BYTES = 128, NODE_BYTES = 20,
-           VALUE_BYTES = 92, ROOT = 0, SERVICE = NODE_BYTES + VALUE_BYTES,
-           READY = SERVICE + 36, INFO = READY + 28, USED = INFO + 120 };
-    unsigned char *area = calloc(1, AREA_BYTES);
-    if (!area) fail("allocate readiness property area");
-#define WORD(offset, value) do { uint32_t word = (value); memcpy(area + (offset), &word, 4); } while (0)
-    WORD(0, USED); WORD(4, 1);
-    WORD(8, 0x504f5250); WORD(12, 0xfc6ed0ab);
-    /* Trie offsets are relative to data_, after the 128-byte header. The
-     * root's 92-byte dirty-value backup remains zero; no writer is started. */
-    WORD(HEADER_BYTES + ROOT + 16, SERVICE);
-    WORD(HEADER_BYTES + SERVICE, 14);
-    WORD(HEADER_BYTES + SERVICE + 16, READY);
-    memcpy(area + HEADER_BYTES + SERVICE + NODE_BYTES, "servicemanager", 15);
-    WORD(HEADER_BYTES + READY, 5);
-    WORD(HEADER_BYTES + READY + 4, INFO);
-    memcpy(area + HEADER_BYTES + READY + NODE_BYTES, "ready", 6);
-    WORD(HEADER_BYTES + INFO, 4u << 24); /* length=4; dirty bit clear */
-    memcpy(area + HEADER_BYTES + INFO + 4, "true", 5);
-    memcpy(area + HEADER_BYTES + INFO + 4 + VALUE_BYTES,
-           "servicemanager.ready", sizeof("servicemanager.ready"));
-#undef WORD
-    int fd = open("/dev/__properties__", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (fd < 0) fail("create private readiness property area");
-    struct stat info;
-    if (fstat(fd, &info)) fail("stat readiness property area");
-    require(info.st_uid == 0 && info.st_gid == 0 && S_ISREG(info.st_mode),
-            "property area must be owned by namespace root");
-    size_t done = 0;
-    while (done < AREA_BYTES) {
-        ssize_t n = write(fd, area + done, AREA_BYTES - done);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) fail("write readiness property area");
-        done += (size_t)n;
-    }
-    free(area);
-    if (fchmod(fd, 0444) || close(fd)) fail("seal readiness property area");
-    puts("STUB_READY_PROPERTY=CREATED: private servicemanager.ready=true; Bionic consumption remains to be observed.");
-}
-
-
+#define PATH_JOIN(dst, root, leaf) require(snprintf(dst, sizeof(dst), "%s/%s", root, leaf) < (int)sizeof(dst), "path too long")
 #define OBSERVE_STEPS 60 /* 100 ms each: six seconds of observation */
 
 /* Runs inside gbos_binder_probe_t, already chrooted, after runcon. */
 static int run_servicemanager(const char *runtime) {
     char linker[4096], image[4096], libraries[4096];
-#define PATH_JOIN(dst, root, leaf) require(snprintf(dst, sizeof(dst), "%s/%s", root, leaf) < (int)sizeof(dst), "path too long")
     PATH_JOIN(linker, runtime, "linker64"); PATH_JOIN(image, runtime, "servicemanager");
     PATH_JOIN(libraries, runtime, "lib64");
     if (setenv("LD_LIBRARY_PATH", libraries, 1)) fail("set Android library path");
@@ -87,9 +35,17 @@ int main(int argc, char **argv) {
     if (signal(SIGALRM, timeout_exit) == SIG_ERR) fail("install alarm handler");
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 3 && strcmp(argv[1], "--sm-run") == 0) return run_servicemanager(argv[2]);
+    if (argc == 5 && strcmp(argv[1], "--register-endpoint") == 0) {
+        /* Unconfined native endpoint: registers through the real servicemanager. */
+        char *end; long ready = strtol(argv[4], &end, 10);
+        require(*end == 0 && ready >= 0 && ready <= 1024, "bad readiness descriptor");
+        parcel_registered_server(argv[2], (int)ready);
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[2], "--describe") == 0) return native_echo_main(argc, argv);
     int with_client = argc == 5 && strcmp(argv[4], "--list-client") == 0;
-    require((argc == 4 || with_client) && sysconf(_SC_PAGESIZE) == 16384,
+    int with_register = argc == 5 && strcmp(argv[4], "--register-parcel") == 0;
+    require((argc == 4 || with_client || with_register) && sysconf(_SC_PAGESIZE) == 16384,
             "requires mount directory, runtime directory, root directory, optional --list-client and 16 KiB pages");
     alarm(30);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs");
@@ -139,7 +95,7 @@ int main(int argc, char **argv) {
         fail("execute traced servicemanager");
     }
     int status = 0, exited = 0;
-    if (with_client) {
+    if (with_client || with_register) {
         /* The real servicemanager would set servicemanager.ready through the property
          * service, which is absent here; the client library waits for it, so publish the
          * same private immutable fixture the earlier probes used (not Android init). */
@@ -149,7 +105,54 @@ int main(int argc, char **argv) {
         for (int step = 0; step < 20 && !exited; step++) {
             if (waitpid(pid, &status, WNOHANG) == pid) exited = 1; else usleep(100000);
         }
-        if (!exited) {
+        if (!exited && with_register) {
+            /* Endpoint: fork before the sealed input exists so it inherits no copy. */
+            char client[4096], libraries[4096], library_env[4200], output[4096], client_trace[4096], linker[4096], device_arg[4096];
+            int ready[2]; if (pipe(ready)) fail("endpoint readiness pipe");
+            char ready_text[32]; snprintf(ready_text, sizeof(ready_text), "%d", ready[1]);
+            pid_t epid = fork(); if (epid < 0) fail("fork native endpoint");
+            if (epid == 0) {
+                close(ready[0]);
+                execl(argv[0], argv[0], "--register-endpoint", device_path, "unused", ready_text, (char *)NULL);
+                fail("execute native endpoint");
+            }
+            close(ready[1]);
+            char token; alarm(30);
+            require(read(ready[0], &token, 1) == 1 && token == 'R', "native endpoint stopped before registering with the real servicemanager");
+            close(ready[0]);
+            int input = parcel_setup_input();
+            PATH_JOIN(client, argv[2], "service"); PATH_JOIN(libraries, argv[2], "lib64"); PATH_JOIN(linker, argv[2], "linker64");
+            PATH_JOIN(output, argv[2], "parcel-client.stdout"); PATH_JOIN(client_trace, argv[2], "parcel-client.trace");
+            (void)device_arg;
+            require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) < (int)sizeof(library_env),
+                    "library environment too long");
+            pid_t cpid = fork(); if (cpid < 0) fail("fork Parcel client");
+            if (cpid == 0) {
+                int out = open(output, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+                if (out < 0 || dup2(out, STDOUT_FILENO) < 0 || dup2(input, STDIN_FILENO) < 0) fail("redirect Parcel client");
+                if (chroot(argv[3]) || chdir("/")) fail("enter private root for Parcel client");
+                execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", client_trace,
+                      "-E", library_env, linker, client, "call", "gbos.parcel", "5658",
+                      "i32", "5658", "fd", "/proc/self/fd/0", (char *)NULL);
+                fail("execute traced Parcel client");
+            }
+            close(input);
+            int cstatus = 0, done = 0;
+            for (int step = 0; step < 100 && !done; step++) {
+                if (waitpid(cpid, &cstatus, WNOHANG) == cpid) done = 1; else usleep(100000);
+            }
+            if (!done) { kill(cpid, SIGKILL); waitpid(cpid, &cstatus, 0); puts("REGISTER_PARCEL_CLIENT=timed out after ten seconds"); }
+            else printf("REGISTER_PARCEL_CLIENT=%s %d\n", WIFEXITED(cstatus) ? "exit status" : "signal",
+                        WIFEXITED(cstatus) ? WEXITSTATUS(cstatus) : WTERMSIG(cstatus));
+            int estatus = 0, edone = 0;
+            for (int step = 0; step < 30 && !edone; step++) {
+                if (waitpid(epid, &estatus, WNOHANG) == epid) edone = 1; else usleep(100000);
+            }
+            if (!edone) { kill(epid, SIGKILL); waitpid(epid, &estatus, 0); puts("REGISTER_ENDPOINT=did not finish within three seconds"); }
+            else printf("REGISTER_ENDPOINT=%s %d\n", WIFEXITED(estatus) ? "exit status" : "signal",
+                        WIFEXITED(estatus) ? WEXITSTATUS(estatus) : WTERMSIG(estatus));
+        }
+        if (!exited && with_client) {
             char client[4096], libraries[4096], library_env[4200], output[4096], client_trace[4096];
             PATH_JOIN(client, argv[2], "service"); PATH_JOIN(libraries, argv[2], "lib64");
             PATH_JOIN(output, argv[2], "list-client.stdout"); PATH_JOIN(client_trace, argv[2], "list-client.trace");

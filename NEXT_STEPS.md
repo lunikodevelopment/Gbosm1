@@ -13,8 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none for you yet. Stage 5b passed (see "Third 5b run" below); the
-next stage is proposed there and waits for your go-ahead.
+Next action: run the one command under "Run now: stage 5c" below, then say
+**get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -340,6 +340,43 @@ private, immutable one-property fixture (`servicemanager.ready=true`) that the
 earlier Android probes used, just before starting the client. This is a stand-in
 for the property service, not Android init, and it is stated here so a pass is
 not read as more than it is.
+
+## Run now: stage 5c, a native endpoint registers through the real `addService`
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as stage 5a/5b below: one new
+`work/asahi/real-servicemanager-*` result directory, the temporary
+`gbos_binder_probe` SELinux module and one label on the new launcher (restored
+and removed by the runner; refuses a preexisting module; SELinux stays
+enforcing), and private mounts that end with the namespace. Nothing outside the
+new directory is written; no partitioning, formatting, flashing or boot change.
+
+What is new: the real `servicemanager` runs as before. A native endpoint
+(unconfined, in the private namespace) calls the real `addService` with the name
+`gbos.parcel`, then the image's own `service call gbos.parcel 5658 i32 5658 fd
+/proc/self/fd/0` looks it up through the real servicemanager, receives the
+returned Binder object, calls it and sends a sealed read-only memfd. The endpoint
+verifies the file and replies with the same receipt as the earlier Parcel probe.
+The one SELinux addition is `binder transfer` from the servicemanager domain to
+`unconfined_t` (the pair denied in the 5b run), because the lookup reply now carries
+a Binder handle to the client.
+
+Expected, as a plan and not a result: from my recollection of upstream (not
+checked in this image) `addService` consults `service_contexts` for the name
+`gbos.parcel`; if the image's file has no matching entry the real servicemanager
+may refuse the registration (the runner then stops at `REGISTER_REPLY` with a
+non-zero status and the trace shows why). That would be a result to report, not a
+defect to hide. The wire layout of my `addService` request (code 5, String16
+name, strong Binder with stability word, bool, dump priority) is also from
+recollection of upstream and unverified here; a rejection or crash is evidence.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --register-parcel
+```
+
+The runner prints `REGISTER_REPLY`, `REGISTER_SERVICE=`, the client output,
+`REGISTER_RECEIPT_VERIFIED=` and both trace tails. After it finishes, say **get logs**.
 
 ## Completed command: stage 5b, the image's `service list` against the real servicemanager (passed on the third run)
 

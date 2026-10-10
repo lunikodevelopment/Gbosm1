@@ -159,6 +159,7 @@ static void list_server(const char *path, int ready) {
 static void parcel_server(const char *path, int ready);
 static int parcel_setup_input(void);
 #endif
+#ifndef GBOS_NO_MAIN /* set by probe-servicemanager.c, which supplies its own main */
 int main(int argc, char **argv) {
     if (signal(SIGALRM, timeout_exit) == SIG_ERR) fail("install alarm handler");
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -252,3 +253,4 @@ int main(int argc, char **argv) {
 #endif
     return 0;
 }
+#endif

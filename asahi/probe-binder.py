@@ -33,9 +33,13 @@ def main():
                       help="start only the image's own servicemanager in a private root and record what happens")
     parser.add_argument('--list-client', action='store_true',
                         help="with --real-servicemanager: also run the image's own `service list` against it")
+    parser.add_argument('--register-parcel', action='store_true',
+                        help="with --real-servicemanager: a native endpoint registers through the real addService and the image's service CLI runs the Parcel call against it")
     args = parser.parse_args()
-    if args.list_client and not args.real_servicemanager:
-        parser.error('--list-client requires --real-servicemanager')
+    if (args.list_client or args.register_parcel) and not args.real_servicemanager:
+        parser.error('--list-client and --register-parcel require --real-servicemanager')
+    if args.list_client and args.register_parcel:
+        parser.error('choose one of --list-client and --register-parcel')
     sm_mode = args.real_servicemanager
     android_mode = args.android_service or args.android_parcel
     if not args.temporary_policy:
@@ -189,7 +193,8 @@ def main():
             spec.loader.exec_module(extraction)
             result['android_runtime'] = extraction.prepare(out, log)
             binary = Path(result['android_runtime']['runtime']) / 'binder-echo'
-            result['limitations'] = ['Only the image servicemanager is started, for six seconds, without a client: no service list, registration or HAL.',
+            result['limitations'] = ['Only the image servicemanager is started, for six seconds; with --list-client the image `service list` runs against it, with --register-parcel a native endpoint registers through the real addService and the image `service call` exercises it. No HAL.',
+                                    'servicemanager.ready is a private immutable fixture, the property service is absent, and SELinux checks on service_manager are only observed as unknown-class allowed by deny_unknown.',
                                     'Fixtures are copied VINTF and service-context files; odm/product/system_ext copies, the property service and logd are absent.',
                                     'An exit, crash or SELinux denial is a result to report, not a defect to hide; exit 0 means the observation completed.']
         if args.object_fd:
@@ -315,6 +320,12 @@ def main():
                 except OSError:
                     optional[key] = None
             result['sm_policy_types'] = {'tree': sorted(tree_types), **optional}
+            if args.register_parcel:
+                # The real servicemanager replies to the client's lookup with a handle for the
+                # endpoint's object: the kernel checks transfer from the servicemanager domain
+                # to the receiving client. The same pair was denied for a different reply in
+                # work/asahi/real-servicemanager-fx76zo2f (21:51:15.991).
+                rules += ['(allow gbos_binder_probe_t unconfined_t (binder (transfer)))']
             rules += [f'(allow gbos_binder_probe_t {t} (file (read open execute execute_no_trans map getattr)))' for t in sorted(tree_types)]
             rules += [f'(allow gbos_binder_probe_t {t} (dir (read open search getattr)))' for t in sorted(directory_types)]
             rules += [f'(allow gbos_binder_probe_t {t} (lnk_file (read getattr)))' for t in sorted(symlink_types)]
@@ -378,6 +389,8 @@ def main():
             command.extend([result['android_runtime']['runtime'], result['android_runtime']['root']])
             if args.list_client:
                 command.append('--list-client')
+            if args.register_parcel:
+                command.append('--register-parcel')
         result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
                                   else 'transfer' if args.object_fd else 'echo', 40)
         marker = ('SM_LAUNCHER=DONE' if sm_mode else 'ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
@@ -432,6 +445,23 @@ def main():
                 result['servicemanager']['list_client_found'] = int(found[1]) if found else None
                 log('LIST CLIENT OUTPUT:\n' + text)
                 log('SERVICE_LIST_FOUND=' + (found[1] if found else 'no "Found N services" line'))
+        if args.register_parcel:
+            client_path = Path(result['android_runtime']['runtime']) / 'parcel-client.stdout'
+            client_output = client_path.read_text(errors='replace')[:65536] if client_path.is_file() else ''
+            result['android_client_stdout'] = client_output
+            log('ANDROID CLIENT OUTPUT:\n' + client_output)
+            reply_dump = re.search(r'Result:\s*Parcel\(([^)]*)\)', client_output, re.I)
+            receipt = bool(reply_dump and re.search(
+                r'\b47504231\s+00004000\b|\b31\s*42\s*50\s*47\s+00\s*40\s*00\s*00\b', reply_dump[1], re.I))
+            result['android_receipt_verified'] = receipt
+            required_markers = ('STUB_READY_PROPERTY=CREATED', 'REGISTER_SERVICE=PASS', 'PARCEL_INPUT=READY',
+                                'ANDROID_OBJECT_READ=PASS', 'ANDROID_FD_WRITE=PASS', 'PARCEL_ENDPOINT_REPLY=PASS',
+                                'REGISTER_PARCEL_CLIENT=exit status 0', 'SM_LAUNCHER=DONE')
+            missing = [item for item in required_markers if item not in output]
+            result['missing_markers'] = missing
+            log('REGISTER_RECEIPT_VERIFIED=' + str(receipt))
+            if missing or not receipt:
+                raise RuntimeError('registered-endpoint markers or printed receipt missing: ' + ', '.join(missing))
         if args.object_fd:
             actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
             if not actual or type_of(actual[1]) != memfd_type:
@@ -465,7 +495,7 @@ def main():
                     with trace.open(errors='replace') as stream:
                         tail = ''.join(deque(stream, maxlen=100))
                     (out / 'client-trace-tail.txt').write_text(tail)
-                    list_trace = out / 'android-runtime' / 'list-client.trace'
+                    list_trace = out / 'android-runtime' / ('parcel-client.trace' if args.register_parcel else 'list-client.trace')
                     if sm_mode and list_trace.is_file():
                         with list_trace.open(errors='replace') as stream:
                             list_tail = ''.join(deque(stream, maxlen=60))
