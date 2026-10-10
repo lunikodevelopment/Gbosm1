@@ -53,6 +53,10 @@ def prepare(out, log, server=None):
         if len(extents) != 1 or 'offset' not in extents[0]:
             raise ValueError(name + ' is not one linear extent')
         offsets[name] = extents[0]['offset']
+    for name in ('system_ext_a', 'product_a', 'odm_a'):  # optional extra library sources
+        extents = parts.get(name, {}).get('extents', [])
+        if len(extents) == 1 and 'offset' in extents[0]:
+            offsets[name] = extents[0]['offset']
     runtime = out / 'android-runtime'
     libs = runtime / 'lib64'
     root = out / 'sm-root'
@@ -148,7 +152,12 @@ def prepare(out, log, server=None):
                 origin = 'earlier extracted runtime:' + name
             else:
                 origin = None
-                for part, directory in (('system_a', '/system/lib64'), ('vendor_a', '/lib64')):
+                attempts = []
+                for part, directory in (('system_a', '/system/lib64'), ('vendor_a', '/lib64'), ('vendor_a', '/lib64/hw'),
+                                        ('system_ext_a', '/lib64'), ('system_ext_a', '/system_ext/lib64'),
+                                        ('product_a', '/lib64'), ('odm_a', '/lib64')):
+                    if part not in offsets:
+                        continue
                     target = directory + '/' + name
                     try:
                         for _ in range(4):  # follow a symlink stored as its target text
@@ -169,10 +178,11 @@ def prepare(out, log, server=None):
                             raise ValueError('symlink chain too long')
                         origin = f'{part}:{target}'
                         break
-                    except ValueError:
+                    except ValueError as error:
+                        attempts.append(f'{part}:{directory}: {error}')
                         destination.unlink(missing_ok=True)
                 if origin is None:
-                    raise ValueError('not found as an ELF file in system_a /system/lib64 or vendor_a /lib64')
+                    raise ValueError('not found as an ELF file; tried ' + '; '.join(attempts))
             pending.update(inspect(destination, origin))
         except ValueError as error:
             destination.unlink(missing_ok=True)

@@ -13,8 +13,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the one command under "Run now: stage 8a" below, then paste
-its output. Stage 7b passed (below).
+Next action: run the one command under "Run now: stage 8b" below (the stage 8a
+command again, with the library search widened), then paste its output.
+Stage 8a (below) registered six more services.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -405,7 +406,49 @@ image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
 
-## Run now: stage 8a, start twelve more image HAL programs and list who registers
+## Run now: stage 8b, the stage 8a command again with a wider library search
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as stage 8a (one new
+`work/asahi/real-servicemanager-*` directory, the temporary `gbos_binder_probe`
+module with only `gbos_binder_probe_t` permissive, one label on the new launcher,
+all removed or restored by the runner; SELinux stays enforcing; private mounts
+end with the namespace; no host device added; no partitioning, formatting,
+flashing or boot change).
+
+What changes: three programs in 8a could not start because one library each was
+not found in `system_a:/system/lib64` or `vendor_a:/lib64`. The extractor now also
+tries `vendor_a:/lib64/hw` and, when those partitions exist in the image,
+`system_ext_a`, `product_a` and `odm_a`, and the "unresolved" message lists every
+place it tried. The program list is the same twelve.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --permissive --serve-image vendor_a:/bin/hw/vendor.google.desktop.ec-executor,vendor_a:/bin/hw/vendor.google.desktop.keyboard_proxy_service,vendor_a:/bin/hw/vendor.google.desktop.vpd_executor.vpd-executor,vendor_a:/bin/hw/vendor.google.desktop.i2cexecutor.i2c-executor,vendor_a:/bin/hw/vendor.google.desktop.futility-executor,vendor_a:/bin/hw/vendor.google.desktop.camera-tool-executor,vendor_a:/bin/hw/vendor.qcom.amp.calib,vendor_a:/bin/hw/vendor.qti.hardware.display.color-service,vendor_a:/bin/hw/vendor.qti.hardware.display.demura-service,vendor_a:/bin/hw/suspend_notification_service,vendor_a:/bin/hw/vendor.qti.hardware.servicetrackeraidl-service,vendor_a:/bin/hw/android.hardware.thermal-service.pixel
+```
+
+Wait for the prompt to return (about 60 seconds), then paste from the first
+`UNRESOLVED` line (if any) and from `servicemanager-run` to the end.
+
+## Results: stage 8a (`real-servicemanager-wnf_t3xy`)
+
+Operationally tested on the user's M1 (output read):
+- Six of twelve registered and answered the interface-descriptor call:
+  `IAmpCalibration`, `IFutilityExecutor`, `II2CExecutor`, `IKeyboardProxyService`,
+  `IVpdExecutor` and `IDemuraFileFinder` (all `/default`). With stage 7 that is
+  eleven distinct image HAL services registered in the private root so far (plus
+  `disk_info` and `gsiservice` from stage 6).
+- Did not start: `ec-executor`, `camera-tool-executor` and
+  `servicetrackeraidl-service` (a library each not found in the searched places:
+  `libec_executor.dylib.so`, `libdesktop_camera_device_config.dylib.so`,
+  `vendor.qti.hardware.servicetrackeraidl-impl.so`).
+- Started and failed: `suspend_notification_service` (Rust error "No such file or
+  directory", file not named), `display.color-service` (exit 255, no message) and
+  `thermal-service.pixel` (SIGABRT after the property-protocol message). Reasons
+  not yet established; the traces are in the result directory.
+- Denials this run: the same two as before; none for the HALs.
+
+## Completed command: stage 8a, start twelve more image HAL programs and list who registers
 
 **THIS STEP MODIFIES STORAGE**
 
