@@ -8,10 +8,32 @@ Current status: Bionic Toybox execution passed. The private Binder probe built,
 mounted binderfs, allocated a device and reported protocol 8 on 16 KiB pages,
 but stopped at context-manager registration with `Permission denied`.
 No Binder payload exchange has passed.
-Next action: collect audit denial records and the process security context;
-the permission error alone does not establish its cause.
+Next development action: prepare a dedicated SELinux domain for the Binder
+probe, with permissions derived from the observed operation and device labels.
+No new user command is required yet. A policy has not been prepared or installed;
+retain enforcement and do not grant all unconfined programs context-manager
+permission.
 
-## One command: Binder denial diagnostics
+## Confirmed SELinux denial
+
+Retrieved `work/asahi/binder-denial-Oo9G7R.log` directly through the target HTTP
+listing. The audit event at 19:31:56 on 10 October 2026 reports:
+
+```text
+avc: denied { set_context_mgr } comm=binder-echo
+scontext=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+tcontext=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+tclass=binder permissive=0
+```
+
+This confirms SELinux denied Binder context-manager registration for this run.
+The ordinary user's reported process domain was also `unconfined_t`.
+It does not establish whether additional Binder operations would be allowed
+once registration is addressed. No policy or enforcement change was made.
+
+## Completed command: Binder denial diagnostics
+
+The diagnostic log has been received; do not rerun this collection now.
 
 **THIS STEP MODIFIES STORAGE**
 
@@ -129,8 +151,8 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 
 Use the report to select the next focused work:
 
-1. Identify the context-manager permission denial using the diagnostic command
-   above, then establish native Binder transactions before Android integration.
+1. Prepare a dedicated SELinux probe domain from the confirmed context-manager
+   denial, then establish native Binder transactions before Android integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
 3. Review a recoverable standalone boot approach only after userspace/kernel
