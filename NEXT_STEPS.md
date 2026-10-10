@@ -2153,6 +2153,21 @@ Android-specific includes and calls found in the sources, and runs `make -k`
 serially so one run lists every remaining error instead of the first. More
 missing headers are possible; the printed list is what I will work from.
 
+Third run (reported by the user, `work/asahi/minigbm-bionic-E94eKqrW`): the
+build now works. `make` exit 0 and `libminigbm.so.1.0.0` is an ELF64 AArch64
+shared object with all four `PT_LOAD` segments aligned 0x4000 (16 KiB),
+`DT_NEEDED` `libdrm.so`, `libdl.so`, `libc.so`, soname `libgbm.so.1`, and the
+`gbm_create_device`, `gbm_bo_create` and `gbm_bo_get_fd` symbols exported. The
+only Android headers the core library needed were the two shimmed ones. The
+probe also built. The run step then failed with `linker: error: expected
+absolute path: "./probe-minigbm-bionic"`: the image's linker wants absolute
+paths (the stage 2d runner already used them). The script now does too.
+
+Not built yet, and needed for the allocator service and mapper: minigbm's
+`cros_gralloc/` code also includes `cutils/native_handle.h`,
+`hardware/gralloc.h`, `cutils/properties.h` and `sync/sync.h`. Those are the next
+set of headers to supply.
+
 ```bash
 cd ~/Gbosm1 && git pull --ff-only
 bash asahi/run-minigbm-bionic.sh

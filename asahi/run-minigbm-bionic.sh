@@ -71,6 +71,6 @@ for n in $(readelf -d "$OUT/lib64/libminigbm.so" | sed -n 's/.*NEEDED.*\[\(.*\)\
     [[ -e $OUT/lib64/$n || $n == ld-android.so ]] || echo "WARNING: libminigbm needs $n, not in the stage 2d library set"
 done
 chmod 700 "$OUT/linker64" "$OUT/probe-minigbm-bionic"
-(cd "$OUT" && env -i PATH=/usr/bin:/bin LANG=C LD_LIBRARY_PATH="$OUT/lib64" ./linker64 ./probe-minigbm-bionic "$OUT/lib64/libminigbm.so" 2>&1 </dev/null)
+(cd "$OUT" && env -i PATH=/usr/bin:/bin LANG=C LD_LIBRARY_PATH="$OUT/lib64" "$OUT/linker64" "$OUT/probe-minigbm-bionic" "$OUT/lib64/libminigbm.so" 2>&1 </dev/null)
 echo "probe exit status: $?"
 echo "Send $OUT/report.txt"
