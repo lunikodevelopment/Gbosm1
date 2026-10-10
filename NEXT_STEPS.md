@@ -14,6 +14,8 @@ module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
 Next action: waiting for the user's go-ahead to build stage 5b (the image's
 `service list` against the real servicemanager). No command is queued.
+Graphics: stage 1 (GBM to Vulkan dma-buf probe) is queued in the graphics
+section below and is independent of the Binder work.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1182,7 +1184,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics stage 0: complete (read-only evidence)
+## Graphics stage 0 complete; stage 1 queued
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -1220,12 +1222,38 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 1 (not yet written)
+### Next: Graphics stage 1, GBM to Vulkan dma-buf round trip
 
-A native Fedora probe that allocates a linear and a tiled buffer with GBM on the
-Asahi render node, imports each into Honeykrisp through dma-buf and its
-modifier, renders and reads back. It is new code and will be added here once
-written. It needs no DRM master and does not touch the display.
+**THIS STEP MODIFIES STORAGE**
+
+Creates one new `work/asahi/gbm-dmabuf-*` directory holding the built probe and
+its logs; delete it to reverse. If the development packages are missing, the
+first command installs `mesa-libgbm-devel` and `libdrm-devel` with dnf
+(`sudo dnf remove` reverses that). The probe uses only the Asahi render node,
+found by driver name; it does not open the display for writing, set a mode or
+need DRM master, so GNOME is unaffected.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+rpm -q mesa-libgbm-devel libdrm-devel >/dev/null || sudo dnf install mesa-libgbm-devel libdrm-devel
+bash asahi/run-gbm-dmabuf.sh
+```
+
+Send the printed `probe.log` and `status.txt`.
+
+What it does, twice (a linear buffer, then the driver's own layout): allocates
+a 256x256 ARGB8888 buffer with GBM on the Asahi render node, exports it as a
+dma-buf, imports it into Honeykrisp with its DRM format modifier, clears it to
+a known colour on the GPU, then checks every pixel through a Vulkan copy and
+through a GBM CPU map. It also lists `/dev/dri` nodes with their driver names.
+
+What the result decides: `linear=PASS` shows the scanout-compatible layout
+round-trips between the allocator and Vulkan; `driver-layout=PASS` shows Asahi's
+own modifier does too. Both passing supports allocating through Mesa's GBM
+(plan decision 1). A failure names the step (`gbm_alloc`, `vulkan_import`,
+`vulkan_readback` or `gbm_readback`) and is a result to report, not to work
+around. This does not test Android, Bionic, scanout or fences between
+processes.
 
 ### Result: Honeykrisp extensions (step 1)
 
