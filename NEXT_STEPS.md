@@ -12,10 +12,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: waiting for the user's go-ahead to build stage 5b (the image's
-`service list` against the real servicemanager). No command is queued.
-Graphics: stage 1 (GBM to Vulkan dma-buf probe) is queued in the graphics
-section below and is independent of the Binder work.
+Next action: run the one command under "Run now: stage 5b" below, then say
+**get logs**.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -314,6 +312,39 @@ it serves any request: no client has talked to it.
 Next (needs the user's go-ahead, since it adds a new client path): run the
 image's own `service list` against it. An answer listing zero services would be
 the first Android-to-Android Binder exchange in this setup.
+
+## Run now: stage 5b, the image's `service list` against the real servicemanager
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as "Run now: real servicemanager first
+run (stage 5a)" below, whose five runs established that setup: one new
+`work/asahi/real-servicemanager-*` result directory, the temporary
+`gbos_binder_probe` SELinux module and one label on the new launcher (restored
+and removed by the runner; refuses a preexisting module; SELinux stays
+enforcing), and private mounts that end with the namespace. Nothing outside the
+new directory is written; no partitioning, formatting, flashing or boot change.
+
+What is new: after `servicemanager` has had about two seconds to take the
+context-manager role, the launcher runs the image's own `service list` (the
+same extracted `linker64` and `service` as the earlier Parcel probe) in the same
+private root, unconfined as your user, under `strace`. Its output goes to
+`android-runtime/list-client.stdout` and its trace to
+`list-client.trace`. No SELinux permission is added for the client or the server
+beyond the 5a module; if the server's check of the client or any transaction is
+denied, the AVC output will name it and I will add only that.
+
+Expected, as a plan and not a result: the client prints `Found N services:`.
+From my recollection of upstream (not checked in this image) the real
+servicemanager registers itself as `manager`, so N may be 1 rather than 0; both
+count. A hang, an error line, or a denial are also results.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --list-client
+```
+
+The runner prints `SERVICE_LIST_FOUND=`, the client output and both trace tails.
+After it finishes, say **get logs**.
 
 ## Run now: real servicemanager first run (stage 5a)
 

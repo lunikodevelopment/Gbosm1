@@ -38,8 +38,9 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 3 && strcmp(argv[1], "--sm-run") == 0) return run_servicemanager(argv[2]);
     if (argc == 3 && strcmp(argv[2], "--describe") == 0) return native_echo_main(argc, argv);
-    require(argc == 4 && sysconf(_SC_PAGESIZE) == 16384,
-            "requires mount directory, runtime directory, root directory and 16 KiB pages");
+    int with_client = argc == 5 && strcmp(argv[4], "--list-client") == 0;
+    require((argc == 4 || with_client) && sysconf(_SC_PAGESIZE) == 16384,
+            "requires mount directory, runtime directory, root directory, optional --list-client and 16 KiB pages");
     alarm(30);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs");
     char control_path[4096], device_path[4096], trace[4096], target[4096];
@@ -88,6 +89,37 @@ int main(int argc, char **argv) {
         fail("execute traced servicemanager");
     }
     int status = 0, exited = 0;
+    if (with_client) {
+        /* Give servicemanager time to become context manager (about 0.1 s in the first
+         * successful run), then run the image's own `service list` unconfined in the same root. */
+        for (int step = 0; step < 20 && !exited; step++) {
+            if (waitpid(pid, &status, WNOHANG) == pid) exited = 1; else usleep(100000);
+        }
+        if (!exited) {
+            char client[4096], libraries[4096], library_env[4200], output[4096], client_trace[4096];
+            PATH_JOIN(client, argv[2], "service"); PATH_JOIN(libraries, argv[2], "lib64");
+            PATH_JOIN(output, argv[2], "list-client.stdout"); PATH_JOIN(client_trace, argv[2], "list-client.trace");
+            require(snprintf(library_env, sizeof(library_env), "LD_LIBRARY_PATH=%s", libraries) < (int)sizeof(library_env),
+                    "library environment too long");
+            char linker[4096]; PATH_JOIN(linker, argv[2], "linker64");
+            pid_t cpid = fork(); if (cpid < 0) fail("fork list client");
+            if (cpid == 0) {
+                int out = open(output, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+                if (out < 0 || dup2(out, STDOUT_FILENO) < 0) fail("redirect list client output");
+                if (chroot(argv[3]) || chdir("/")) fail("enter private root for list client");
+                execl("/usr/bin/strace", "strace", "-f", "-tt", "-T", "-yy", "-s", "160", "-o", client_trace,
+                      "-E", library_env, linker, client, "list", (char *)NULL);
+                fail("execute traced list client");
+            }
+            int cstatus = 0, done = 0;
+            for (int step = 0; step < 100 && !done; step++) {
+                if (waitpid(cpid, &cstatus, WNOHANG) == cpid) done = 1; else usleep(100000);
+            }
+            if (!done) { kill(cpid, SIGKILL); waitpid(cpid, &cstatus, 0); puts("LIST_CLIENT=timed out after ten seconds"); }
+            else printf("LIST_CLIENT=%s %d\n", WIFEXITED(cstatus) ? "exit status" : "signal",
+                        WIFEXITED(cstatus) ? WEXITSTATUS(cstatus) : WTERMSIG(cstatus));
+        }
+    }
     for (int step = 0; step < OBSERVE_STEPS && !exited; step++) {
         pid_t done = waitpid(pid, &status, WNOHANG);
         if (done == pid) exited = 1; else if (done < 0) fail("wait for servicemanager tree");

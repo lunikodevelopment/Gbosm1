@@ -31,7 +31,11 @@ def main():
                       help='run image service call against a controlled object/FD Parcel endpoint')
     mode.add_argument('--real-servicemanager', action='store_true',
                       help="start only the image's own servicemanager in a private root and record what happens")
+    parser.add_argument('--list-client', action='store_true',
+                        help="with --real-servicemanager: also run the image's own `service list` against it")
     args = parser.parse_args()
+    if args.list_client and not args.real_servicemanager:
+        parser.error('--list-client requires --real-servicemanager')
     sm_mode = args.real_servicemanager
     android_mode = args.android_service or args.android_parcel
     if not args.temporary_policy:
@@ -372,6 +376,8 @@ def main():
             command.append(result['android_runtime']['runtime'])
         if sm_mode:
             command.extend([result['android_runtime']['runtime'], result['android_runtime']['root']])
+            if args.list_client:
+                command.append('--list-client')
         result['execution'] = run(command, 'servicemanager-run' if sm_mode else 'parcel-call' if args.android_parcel else 'service-list' if args.android_service
                                   else 'transfer' if args.object_fd else 'echo', 40)
         marker = ('SM_LAUNCHER=DONE' if sm_mode else 'ANDROID_PARCEL=PASS' if args.android_parcel else 'LIBBINDER_LIST=PASS' if args.android_service
@@ -418,6 +424,14 @@ def main():
             for item in result['servicemanager']['context_manager_lines']:
                 log('TRACE ' + item)
             log('SERVICEMANAGER_OBSERVED=' + str(result['servicemanager']['observed']))
+            if args.list_client:
+                listing = Path(result['android_runtime']['runtime']) / 'list-client.stdout'
+                text = listing.read_text(errors='replace')[:65536] if listing.is_file() else ''
+                found = re.search(r'Found (\d+) services?:', text)
+                result['servicemanager']['list_client_stdout'] = text
+                result['servicemanager']['list_client_found'] = int(found[1]) if found else None
+                log('LIST CLIENT OUTPUT:\n' + text)
+                log('SERVICE_LIST_FOUND=' + (found[1] if found else 'no "Found N services" line'))
         if args.object_fd:
             actual = re.search(r'^BINDER_MEMFD_CONTEXT=([^\n]+)', output, re.M)
             if not actual or type_of(actual[1]) != memfd_type:
@@ -451,6 +465,12 @@ def main():
                     with trace.open(errors='replace') as stream:
                         tail = ''.join(deque(stream, maxlen=100))
                     (out / 'client-trace-tail.txt').write_text(tail)
+                    list_trace = out / 'android-runtime' / 'list-client.trace'
+                    if sm_mode and list_trace.is_file():
+                        with list_trace.open(errors='replace') as stream:
+                            list_tail = ''.join(deque(stream, maxlen=60))
+                        (out / 'list-client-trace-tail.txt').write_text(list_tail)
+                        log('LIST CLIENT TRACE TAIL:\n' + list_tail)
                     log('CLIENT TRACE TAIL:\n' + tail)
                 else:
                     log('Client trace unavailable: execution may have stopped before the Android client started.')
