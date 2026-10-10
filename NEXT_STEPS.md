@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6b", below) and paste its output.
+bring-up stage B6c", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1019,7 +1019,26 @@ Operationally tested on the M1:
   servicemanager domain, so whether SELinux also refused the open is not shown;
   the denial summary is reworked below.
 
-## Next action: bring-up stage B6b, Binder device permissions
+## Results: bring-up stage B6b (`root-smoke-61dosp7t`; reported by the user)
+
+- **system_server entered Java startup** (operationally tested): the image's init lines
+  set the binderfs devices to 0666, system_server opened Binder, and logcat shows
+  `SystemServerTiming: InitBeforeStartServices`, `system_server_start: [1,...]` and
+  `SystemServer: Entered the Android system server!`.
+- It set its first properties through the stand-in: `sys.system_server.start_count`,
+  `start_elapsed`, `start_uptime`, `persist.sys.timezone=GMT`,
+  `persist.sys.dalvik.vm.lib.2=libart.so` and `ro.build.fingerprint` (new name, accepted).
+- **Stop:** `java.lang.SecurityException: Cannot set priority to -2` at
+  `SystemServer.run(SystemServer.java:953)`; the trace shows `setpriority(PRIO_PROCESS,
+  200, -2) = -1 EACCES`. Nice values are not covered by the user namespace: without
+  `CAP_SYS_NICE` the kernel allows lower nice values only up to `RLIMIT_NICE`, which is 0
+  in the Fedora session. (The earlier zygote `setpriority(-8)` EACCES lines have the same
+  cause but were not fatal.)
+- SELinux: **no enforced denials**; the temporary domain logged 31 kinds of accesses,
+  including the binder device and the property area.
+- The temporary module was removed again.
+
+## Next action: bring-up stage B6c, priority limits for the run
 
 Approved by the user in the "Remaining steps to boot Android" thread (decision card, 10
 October 2026).
@@ -1042,7 +1061,13 @@ was interrupted, run `sudo semodule -r gbos_binder_probe`, then delete the print
 directory. No partition, boot, flash or enforcement change; no host device beyond the
 private binderfs.
 
-What changes from B6a: after mounting binderfs the run applies the image's own init
+What changes from B6b: right after installing the module the run raises `RLIMIT_NICE`
+to 40 (allows nice -20) and `RLIMIT_RTPRIO` to 99 for its own process tree with `sudo
+prlimit --pid <the script's pid>`, and prints the resulting limits. This changes no
+configuration file; the limits end with that process. When servicemanager is running the
+run also prints the image's own `service list`.
+
+Earlier change (B6b): after mounting binderfs the run applies the image's own init
 `chmod`/`chown` lines for `/dev/binderfs` (new `--perms-under` mode of
 `asahi/replay-init-dirs.py`; it falls back to 0666 with a note if no line matches), and
 lists the devices. The denial summary now prints every enforced denial for the Android

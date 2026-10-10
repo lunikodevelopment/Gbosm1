@@ -126,6 +126,10 @@ ZPID=$!
   done ) &
 for i in $(seq 1 "$WAIT"); do kill -0 "$ZPID" 2>/dev/null || break; sleep 1; done
 if kill -0 "$ZPID" 2>/dev/null; then echo "zygote STILL RUNNING after ${WAIT}s"; else wait "$ZPID"; echo "zygote EXITED, status $?"; fi
+if [ -n "$SMCTX" ]; then
+  echo "--- services registered with servicemanager now (image's own 'service list', first 60):"
+  timeout 15 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/service list 2>&1 | grep -v linkerconfig | head -n 60 | cut -c1-160
+fi
 echo "--- zygote stdout/stderr (first 30):"; head -n 30 "$OUT/zygote.out" | cut -c1-240
 echo "--- last snapshot of descriptors that point at / (process, number, command):"
 if [ -s "$OUT/rootfd.last" ]; then
@@ -423,6 +427,15 @@ def main():
     if binder:
         smctx, entry = prepare_binder_policy(root, out)
         installed = True
+        # Android raises thread priorities (SystemServer.run: setThreadPriority(-2), zygote threads -8,
+        # display threads real-time). Nice values are not namespaced: without CAP_SYS_NICE the kernel
+        # allows them only within RLIMIT_NICE / RLIMIT_RTPRIO, which are 0 for a Fedora session (B6b:
+        # "Cannot set priority to -2"). Raise both limits for this one process tree; they end with it.
+        raised = subprocess.run(["sudo", "prlimit", "--pid", str(os.getpid()), "--nice=40:40", "--rtprio=99:99"],
+                                capture_output=True, text=True)
+        limits = subprocess.run(["prlimit", "--pid", str(os.getpid()), "--nice", "--rtprio", "--noheadings"],
+                                capture_output=True, text=True)
+        print(f"priority limits for this run (exit {raised.returncode}): {' | '.join(limits.stdout.split(chr(10))).strip()}", flush=True)
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
                "bash", str(script), str(root), str(out), shutil.which("python3") or "python3",
                str((HERE / "smoke-logd-art.py")), str(HERE / "make-property-area.py"),
