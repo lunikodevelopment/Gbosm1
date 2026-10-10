@@ -14,15 +14,19 @@ get new trie nodes at the end of the used space.
 Rules it mirrors from init: an existing ro.* property is not changed (PROP_ERROR_SET_FAILED),
 and values of 92 bytes or more are refused except for new ro.* names (which it cannot store
 here, so it refuses those too and logs them). ctl.* requests (start/stop a service) are
-logged and answered with success, but nothing is started. There are no SELinux or uid
+logged and answered with success; nothing is started unless a START rule names that exact
+request (NAME=VALUE): then the rule's program is run once, and again only after it has exited,
+as init restarts an on-demand service such as apexd for ctl.interface_start=aidl/apexservice.
+There are no SELinux or uid
 permission checks, no persistent properties and no property triggers. Every request is
 appended to LOG_FILE.
 
-Usage: sandbox-property-service.py AREA_FILE SOCKET_PATH LOG_FILE
-Runs until killed.
+Usage: sandbox-property-service.py AREA_FILE SOCKET_PATH LOG_FILE [NAME=VALUE=PROGRAM ...]
+e.g. ctl.interface_start=aidl/apexservice=/path/start-apexd.sh. Runs until killed.
 """
 import os
 import socket
+import subprocess
 import struct
 import sys
 import threading
@@ -111,7 +115,27 @@ def read_exact(conn, count):
     return data
 
 
-def serve(conn, area, log):
+class Starter:
+    """Runs a program for a ctl.* request, at most one instance at a time (like init's on-demand services)."""
+
+    def __init__(self, rules, log):
+        self.rules, self.log, self.running, self.lock = rules, log, {}, threading.Lock()
+
+    def handle(self, request):
+        program = self.rules.get(request)
+        if not program:
+            return "control request logged; nothing started (stand-in)"
+        with self.lock:
+            process = self.running.get(program)
+            if process and process.poll() is None:
+                return f"already running (pid {process.pid})"
+            exited = "" if not process else f"; previous instance exited with {process.returncode}"
+            self.running[program] = subprocess.Popen([program], stdin=subprocess.DEVNULL,
+                                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return f"started {os.path.basename(program)} (pid {self.running[program].pid}){exited}"
+
+
+def serve(conn, area, log, starter):
     try:
         conn.settimeout(5)
         cmd = struct.unpack("<I", read_exact(conn, 4))[0]
@@ -122,7 +146,7 @@ def serve(conn, area, log):
         name = read_exact(conn, struct.unpack("<I", read_exact(conn, 4))[0]).decode(errors="replace")
         value = read_exact(conn, struct.unpack("<I", read_exact(conn, 4))[0]).decode(errors="replace")
         if name.startswith("ctl."):
-            code, note = 0, "control request logged; nothing started (stand-in)"
+            code, note = 0, starter.handle(f"{name}={value}")
         elif len(value.encode()) >= 92:
             code, note = INVALID_VALUE, "92+ byte value not stored by the stand-in"
         else:
@@ -136,7 +160,7 @@ def serve(conn, area, log):
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) < 4:
         sys.exit(__doc__)
     area = Area(sys.argv[1])
     out = open(sys.argv[3], "a", buffering=1)
@@ -146,16 +170,22 @@ def main():
         with lock:
             out.write(text + "\n")
 
+    rules = {}
+    for rule in sys.argv[4:]:
+        request, program = rule.rsplit("=", 1)
+        rules[request] = program
+    starter = Starter(rules, log)
+
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     if os.path.exists(sys.argv[2]):
         os.unlink(sys.argv[2])
     server.bind(sys.argv[2])
     os.chmod(sys.argv[2], 0o666)
     server.listen(64)
-    log("property service stand-in listening")
+    log("property service stand-in listening" + "".join(f"; starts {os.path.basename(v)} on {k}" for k, v in rules.items()))
     while True:
         conn, _ = server.accept()
-        threading.Thread(target=serve, args=(conn, area, log), daemon=True).start()
+        threading.Thread(target=serve, args=(conn, area, log, starter), daemon=True).start()
 
 
 if __name__ == "__main__":

@@ -34,6 +34,11 @@ spec.loader.exec_module(base)
 PRELUDE = base.SCRIPT[:base.SCRIPT.index('say "S0')]
 
 SCRIPT = PRELUDE + r'''ZYG="$8"; WAIT="${9:-60}"; SS="${10:-}"; SMCTX="${11:-}"; SMENTRY="${12:-}"
+# /dev/kmsg: a FIFO drained into $OUT/kmsg.log instead of the prelude's plain file, where every writer
+# overwrote the others from offset 0 (B6f lost apexd's last lines that way); FIFO writes of a line are atomic
+rm -f "$ROOT/dev/kmsg"; mkfifo -m 0666 "$ROOT/dev/kmsg"
+( exec 9<>"$ROOT/dev/kmsg"; exec cat <&9 >> "$OUT/kmsg.log" ) &
+KMSGPID=$!
 say "S0 property area"
 "$PY" "$PROPS" "$ROOT" "$ROOT/dev/__properties__" logd.ready=true servicemanager.ready=true apexd.status=ready \
   ro.logd.auditd=false ro.logd.kernel=false ro.boottime.init=1 sys.boot_completed=0 ro.zygote=zygote64 \
@@ -60,7 +65,17 @@ say "S0b every mkdir and symlink of the image's init .rc files, replayed under t
 "$PY" "$(dirname "$ZYG")/replay-init-dirs.py" "$ROOT" 2>&1 | cut -c1-900
 
 say "S0c stand-ins: property service socket, and the selinux_android_setcon stub for zygote"
-"$PY" "$(dirname "$ZYG")/sandbox-property-service.py" "$ROOT/dev/__properties__" "$ROOT/dev/socket/property_service" "$OUT/property-sets.log" &
+# apexd is a lazy service (B6h: it registered apexservice, saw no client and exited 0); init starts it again on
+# each ctl.interface_start=aidl/apexservice, so the stand-in does the same with this script (one instance at a time)
+STARTRULES=()
+if [ -n "$SMCTX" ]; then
+  if command -v strace >/dev/null 2>&1; then ATR="strace -f -s 160 -o $OUT/apexd-\$(date +%s%N).trace"; else ATR=""; fi
+  printf '#!/bin/bash\nexec unshare --mount --propagation private %s chroot "%s" /system/bin/toybox env -i %s /system/bin/apexd >> "%s/apexd.out" 2>&1\n' \
+    "$ATR" "$ROOT" "${BASEENV[*]}" "$OUT" > "$OUT/start-apexd.sh"
+  chmod 0755 "$OUT/start-apexd.sh"
+  STARTRULES=("ctl.interface_start=aidl/apexservice=$OUT/start-apexd.sh")
+fi
+"$PY" "$(dirname "$ZYG")/sandbox-property-service.py" "$ROOT/dev/__properties__" "$ROOT/dev/socket/property_service" "$OUT/property-sets.log" "${STARTRULES[@]}" &
 PROPPID=$!
 sleep 1
 ls -l "$ROOT/dev/socket/property_service" 2>&1 | cut -c1-120
@@ -107,16 +122,9 @@ if [ -n "$SMCTX" ]; then
     head -n 10 "$OUT/servicemanager.out" | cut -c1-220
     echo "servicemanager domain: $(cat "$ROOT"/proc/[0-9]*/attr/current 2>/dev/null | tr '\0' '\n' | grep -m1 gbos_binder_probe_t || echo 'not seen')"
   else echo "binderfs mount FAILED"; fi
-  say "S1c the image's apexd (init starts it on demand for aidl/apexservice; here upfront, in its own mount namespace)"
-  if command -v strace >/dev/null 2>&1; then ATR=(strace -f -s 160 -o "$OUT/apexd.trace"); else ATR=(); fi
-  unshare --mount --propagation private "${ATR[@]}" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/apexd > "$OUT/apexd.out" 2>&1 &
-  APEXDPID=$!
-  sleep 5
-  if kill -0 "$APEXDPID" 2>/dev/null; then echo "apexd still running"; else wait "$APEXDPID"; echo "apexd EXITED, status $?"; fi
-  head -n 10 "$OUT/apexd.out" | grep -v linkerconfig | cut -c1-200
-  # apexd logs through libbase's KernelLogger, i.e. to the stand-in /dev/kmsg file, not to logd (B6e showed nothing in logcat)
-  echo "apexd messages in the stand-in /dev/kmsg so far (first 40):"
-  grep -a 'apexd' "$ROOT/dev/kmsg" | head -n 40 | cut -c1-240
+  say "S1c apexd: not started upfront; the property stand-in starts $OUT/start-apexd.sh on ctl.interface_start=aidl/apexservice"
+  sed 's/^/  /' "$OUT/start-apexd.sh" | cut -c1-220
+  APEXDPID=on-demand
 fi
 
 say "S2 derive_classpath"
@@ -177,24 +185,19 @@ sed -E 's/ \((updated|added)\)$//' "$OUT/property-sets.log" 2>/dev/null | awk '{
 echo "--- system_server lines in logcat (last 25):"
 timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' (SystemServer|SystemServiceManager|ServiceManager|servicemanager|system_server|Looper|ActivityManager|PackageManager)' | grep -v 'runtime.cc:769' | tail -n 25 | cut -c1-260
 if [ -n "$APEXDPID" ]; then
-  echo "--- apexd in logcat (first 30 lines, then last 10):"
-  timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d -b all 2>&1 | grep -a -E ' apexd' > "$OUT/apexd.logcat"
-  head -n 30 "$OUT/apexd.logcat" | cut -c1-240; echo "..."; tail -n 10 "$OUT/apexd.logcat" | cut -c1-240
-  if kill -0 "$APEXDPID" 2>/dev/null; then echo "apexd still running at the end"; else echo "apexd is NOT running at the end"; fi
-  echo "--- apexd messages in the stand-in /dev/kmsg (all of them, up to 80):"
-  grep -a 'apexd' "$ROOT/dev/kmsg" | head -n 80 | cut -c1-260
-  if [ -s "$OUT/apexd.trace" ]; then
-    echo "--- how apexd's processes ended (trace):"
-    grep -E '\+\+\+ (exited|killed)|--- SIG' "$OUT/apexd.trace" | cut -c1-200 | head -n 10
-    echo "--- last 15 apexd trace lines that are not memory or futex calls:"
-    grep -v -E 'futex|mmap|munmap|mprotect|madvise|PR_SET_VMA|brk\(' "$OUT/apexd.trace" | tail -n 15 | cut -c1-200
-    echo "--- apexd failed calls, distinct (first 25):"
-    grep -E '= -1 E' "$OUT/apexd.trace" | sed -E 's/^[0-9]+ +//' | grep -v -E 'ld.so.preload|/proc/self' | cut -c1-170 | sort | uniq -c | sort -rn | head -n 25
-    echo "--- apexd mount, loop and device-mapper calls (first 15):"
-    grep -E '(mount|umount2)\(|loop|device-mapper|/dev/block' "$OUT/apexd.trace" | cut -c1-200 | head -n 15
-  fi
+  echo "--- apexd instances started by the property stand-in, and apexd processes running now:"
+  grep -a 'apexservice' "$OUT/property-sets.log" | grep -v -E 'already running|nothing started' | cut -c1-200 | head -n 10
+  for p in "$ROOT"/proc/[0-9]*; do grep -q -a '^/system/bin/apexd' "$p/cmdline" 2>/dev/null && echo "running: pid ${p##*/}"; done
+  echo "--- apexd and lazy-service messages in /dev/kmsg (first 40, without the pre-installed APEX list):"
+  grep -a -E 'apexd|LazyServiceRegistrar' "$OUT/kmsg.log" | grep -v 'Found pre-installed APEX' | head -n 40 | cut -c1-240
+  echo "--- other processes' /dev/kmsg messages (first 15):"
+  grep -a -v -E 'apexd|LazyServiceRegistrar' "$OUT/kmsg.log" | head -n 15 | cut -c1-240
+  echo "--- how each apexd trace ended:"
+  for t in "$OUT"/apexd-*.trace; do [ -s "$t" ] && echo "${t##*/}: $(grep -E '^[0-9]+ +\+\+\+ (exited|killed)' "$t" | tail -n 1 | cut -c1-120)"; done 2>/dev/null | head -n 10
+  echo "--- apexd mount, loop and device-mapper calls (all traces, first 10):"
+  cat "$OUT"/apexd-*.trace 2>/dev/null | grep -E '(mount|umount2)\(|loop|device-mapper|/dev/block' | cut -c1-200 | head -n 10
 fi
-pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID $APEXDPID 2>/dev/null
+pkill -P $$ 2>/dev/null; kill "$ZPID" "$LOGDPID" "$PROPPID" $SMPID "$KMSGPID" 2>/dev/null; pkill -f "$OUT/start-apexd.sh" 2>/dev/null
 echo; echo "steps finished"
 '''
 
@@ -436,7 +439,7 @@ def main():
         sys.exit("run as your ordinary user, without sudo")
     binder = "--binder" in sys.argv[1:]
     system_server = binder or "--system-server" in sys.argv[1:]
-    print("=== BRING-UP THREAD, STAGE " + ("B6f" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE " + ("B6i" if binder else "B5a" if system_server else "B4") + ": ZYGOTE PRELOAD" + (" WITH --start-system-server" if system_server else " WITHOUT SYSTEM_SERVER") + " (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")

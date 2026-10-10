@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B6h", below, read-only) and paste its output.
+bring-up stage B6i", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -1125,7 +1125,58 @@ directory`; `0 packages restored.` Then it exited with status 0 and logged nothi
 configured by this test, not tested: the property area has `apexd.status=ready` (added for
 earlier stages), which an apexd that checks it could read as "boot already finished".
 
-## Next action: bring-up stage B6h, apexd's last system calls and property reads (read-only)
+## Results: bring-up stage B6h (read from the B6f trace; reported by the user)
+
+- **apexd did register `apexservice`** (operationally tested): right after `0 packages
+  restored.` it logged `libbinder.AidlLazyServiceRegistrar: Registering service apexservice`,
+  then `Trying to shut down the service. No clients in use for any service in process.` and
+  `Unregistered all clients and exiting`, and exited 0. apexd is a lazy (on-demand) service:
+  with no client connected it unregisters and quits, and on a device init starts it again
+  for each `ctl.interface_start=aidl/apexservice`. In B6e/B6f it was started before zygote,
+  so it had no client yet; the stand-in then ignored system_server's 42 start requests.
+- Earlier in the same run apexd looked up `vold` through servicemanager ("Waiting for service
+  'vold'") and carried on without it. Its `/dev/device-mapper` failure did not stop it.
+- apexd opened `/dev/binder` itself; binder calls succeeded.
+
+## Next action: bring-up stage B6i, apexd started on demand like init
+
+**THIS STEP MODIFIES STORAGE.** Scope, loss and reversal are as in B6e/B6f:
+- One new `work/asahi/root-smoke-*` directory (logs, traces, the stubs, a policy file, a
+  labelled copy of the image's servicemanager that the run deletes, and a small
+  `start-apexd.sh`) and the rewritten `apex/apex-info-list.xml`.
+- **Host SELinux policy, temporarily:** `sudo semodule -i` installs the `gbos_binder_probe`
+  module (only `gbos_binder_probe_t` permissive); `sudo chcon` labels the servicemanager
+  copy; `sudo prlimit` raises nice/rtprio limits for the run's own processes. Fedora stays
+  enforcing.
+- Private binderfs and tmpfs mounts vanish with the namespace.
+
+Possible loss: none. Reversal: the run removes the module itself, even after a failure, and
+prints whether that worked. If it was interrupted, run `sudo semodule -r gbos_binder_probe`,
+then delete the printed directory. No partition, boot, flash or enforcement change; no host
+device beyond the private binderfs.
+
+What changes from B6f:
+- apexd is no longer started upfront. The property stand-in now takes start rules: on
+  `ctl.interface_start=aidl/apexservice` it runs `start-apexd.sh` (the same chroot, own mount
+  namespace and strace as before; one trace file per start), and only if no apexd started
+  by it is still running. This mirrors init's on-demand restart.
+- `/dev/kmsg` is a FIFO read into `kmsg.log` in the result directory, so writers no longer
+  overwrite each other.
+- The output lists each apexd start the stand-in made, apexd processes alive at the end,
+  apexd and lazy-service messages, other kmsg lines, and how each apexd trace ended.
+
+Expected: system_server's first wait for `apexservice` starts apexd, system_server becomes
+its client, apexd stays up and system_server continues past `PlatformCompat` to the next
+missing piece.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --binder
+```
+
+sudo may ask for your password. The first line reads `=== BRING-UP THREAD, STAGE B6i`.
+Paste only the command output into this thread, "Remaining steps to boot Android".
+
+## Previous action (done): bring-up stage B6h, apexd's last system calls and property reads (read-only)
 
 Nothing is run or written; this reads the B6f trace again. It prints apexd's calls after
 `0 packages restored.` (without memory, futex and signal-mask calls), and every binder or
