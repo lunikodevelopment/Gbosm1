@@ -341,6 +341,21 @@ earlier Android probes used, just before starting the client. This is a stand-in
 for the property service, not Android init, and it is stated here so a pass is
 not read as more than it is.
 
+### First 5c run: `addService` was refused by the driver (SELinux)
+
+Reported by the user (`work/asahi/real-servicemanager-ugx7yux7`, exit 1, cleanup
+0/0): the endpoint's `addService` transaction came back as `BR_FAILED_REPLY`
+(0x7211) and the runner stopped with "native endpoint stopped before registering".
+The AVC log shows a new denial in this run (21:57:14.258; entries at 21:51 are
+stale): `{ transfer }` binder from `unconfined_t` (the endpoint, comm
+`binder-echo`) to `gbos_binder_probe_t` (the servicemanager). Passing the
+endpoint's own Binder object to the servicemanager needs that permission in this
+direction as well; I had only added the servicemanager-to-client direction. The
+request never reached the servicemanager's name checks, so whether
+`service_contexts` accepts `gbos.parcel` and whether my request layout is right
+are still untested. Change: the temporary module also allows `binder transfer`
+from `unconfined_t` to `gbos_binder_probe_t` in this mode. Rerun the same command.
+
 ## Run now: stage 5c, a native endpoint registers through the real `addService`
 
 **THIS STEP MODIFIES STORAGE**

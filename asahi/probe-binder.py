@@ -326,6 +326,10 @@ def main():
                 # to the receiving client. The same pair was denied for a different reply in
                 # work/asahi/real-servicemanager-fx76zo2f (21:51:15.991).
                 rules += ['(allow gbos_binder_probe_t unconfined_t (binder (transfer)))']
+                # First 5c run (work/asahi/real-servicemanager-ugx7yux7, 21:57:14.258): registering the
+                # endpoint's own Binder object was denied the other way round, unconfined_t -> servicemanager
+                # domain, and the driver returned BR_FAILED_REPLY (0x7211).
+                rules += ['(allow unconfined_t gbos_binder_probe_t (binder (transfer)))']
             rules += [f'(allow gbos_binder_probe_t {t} (file (read open execute execute_no_trans map getattr)))' for t in sorted(tree_types)]
             rules += [f'(allow gbos_binder_probe_t {t} (dir (read open search getattr)))' for t in sorted(directory_types)]
             rules += [f'(allow gbos_binder_probe_t {t} (lnk_file (read getattr)))' for t in sorted(symlink_types)]
