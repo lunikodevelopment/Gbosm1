@@ -47,6 +47,7 @@ FLAGS="-std=gnu++20 -O1 -w -D_GNU_SOURCE -pthread -I$A -I$A/include -I$A/build -
     for s in $AIDL_SRCS; do echo "$A/$s.cpp aidl_$s"; done
     for s in aidl_language_y aidl_language_l; do echo "$OUT/gen-parser/$s.cpp gen_$s"; done
     for s in $BASE_SRCS; do echo "$B/$s.cpp base_$s"; done
+    echo "$ROOT/asahi/liblog-host-shim.cpp shim_liblog"
 } > "$OUT/units.txt"
 export OUT FLAGS
 cat "$OUT/units.txt" | xargs -P "$(nproc)" -L1 bash -c 'clang++ $FLAGS -c "$0" -o "$OUT/obj/$1.o" >"$OUT/obj/$1.log" 2>&1 || echo "FAILED $1"'

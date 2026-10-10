@@ -2336,6 +2336,12 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-aidl-host.sh
 ```
 
+Third run (reported): gtest-devel installed and all 51 objects compiled. The
+link failed on `__android_log_*` symbols (libbase logging needs liblog). The
+script now also compiles `asahi/liblog-host-shim.cpp`, a small original
+stand-in that logs to stderr. No new packages; rerun the same two lines
+(`git pull --ff-only`, `bash asahi/build-aidl-host.sh`) and send `report.txt`.
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3i, AOSP sources (fetched, not built)
