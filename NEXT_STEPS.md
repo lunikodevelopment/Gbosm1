@@ -13,8 +13,8 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: none for you right now. Stage 7b passed (below); the next stage
-waits on a direction decision in the thread.
+Next action: run the one command under "Run now: stage 8a" below, then paste
+its output. Stage 7b passed (below).
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -404,6 +404,37 @@ an Android-built Binder server registering with the real servicemanager (the
 image has no suitable test service, so this needs either an existing image
 service that can run alone or a minimal client I would have to build, which
 I will check before proposing a design), then Android receiving an FD.
+
+## Run now: stage 8a, start twelve more image HAL programs and list who registers
+
+**THIS STEP MODIFIES STORAGE**
+
+Same scope, filesystem, loss and reversal as stage 7a/7b: one new
+`work/asahi/real-servicemanager-*` directory, the temporary `gbos_binder_probe`
+module with only `gbos_binder_probe_t` permissive, one label on the new launcher,
+all removed or restored by the runner; SELinux stays enforcing; private mounts
+end with the namespace. No host device is added to the private root. No
+partitioning, formatting, flashing or boot change.
+
+What it does: as 7a, with twelve other programs chosen from the `.rc` scan
+(hardware-light, AIDL-declaring): `ec-executor`, `keyboard_proxy_service`,
+`vpd-executor`, `i2c-executor`, `futility-executor`, `camera-tool-executor`,
+`amp.calib`, `display.color-service`, `display.demura-service`,
+`suspend_notification_service`, `servicetrackeraidl-service` and
+`thermal-service.pixel`. Each starts unconfined in the private root, 0.5 s apart.
+After about 9 seconds `service list` runs, every registered service gets the
+interface-descriptor call, and everything is stopped. Expect several to exit
+early (missing devices, sockets, properties or config files). Their exit state,
+output and last trace lines are what this stage collects. Their command-line
+arguments in the `.rc` files are not passed.
+
+If an extraction path is wrong, the run stops before the module is installed.
+Wait for the prompt to return (about 60 seconds), then paste from
+`servicemanager-run` to the end.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --real-servicemanager --permissive --serve-image vendor_a:/bin/hw/vendor.google.desktop.ec-executor,vendor_a:/bin/hw/vendor.google.desktop.keyboard_proxy_service,vendor_a:/bin/hw/vendor.google.desktop.vpd_executor.vpd-executor,vendor_a:/bin/hw/vendor.google.desktop.i2cexecutor.i2c-executor,vendor_a:/bin/hw/vendor.google.desktop.futility-executor,vendor_a:/bin/hw/vendor.google.desktop.camera-tool-executor,vendor_a:/bin/hw/vendor.qcom.amp.calib,vendor_a:/bin/hw/vendor.qti.hardware.display.color-service,vendor_a:/bin/hw/vendor.qti.hardware.display.demura-service,vendor_a:/bin/hw/suspend_notification_service,vendor_a:/bin/hw/vendor.qti.hardware.servicetrackeraidl-service,vendor_a:/bin/hw/android.hardware.thermal-service.pixel
+```
 
 ## Completed command: stage 7b, call each registered HAL once and read two getters
 

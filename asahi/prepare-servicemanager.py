@@ -135,8 +135,8 @@ def prepare(out, log, server=None):
         pending.remove(name)
         if name in done:
             continue
-        if not re.fullmatch(r'[A-Za-z0-9_.@+-]+', name) or len(done) >= 96:
-            raise ValueError('unsupported dependency name or 96-library limit reached')
+        if not re.fullmatch(r'[A-Za-z0-9_.@+-]+', name) or len(done) >= 200:
+            raise ValueError('unsupported dependency name or 200-library limit reached')
         done.add(name)
         destination = libs / name
         candidate = old / 'lib64' / name
