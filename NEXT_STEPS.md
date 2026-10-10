@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5p", below) and paste its output.
+bring-up stage B6a (needs your approval)", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -988,38 +988,30 @@ Operationally tested on the M1:
   file, where Fedora's policy rejects the Android label (inferred: the write itself
   is not in the trace's syscall set).
 
-## Next action: bring-up stage B5p, stand-ins for setcon and the property service
+## Results: bring-up stage B5p (`root-smoke-gtnns09f`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5o: the
-rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory (logs,
-trace, and now a 1 KB stub library built there with Fedora's clang); private tmpfs
-mounts take the rest and vanish at exit. Loss: none. Reversal: delete the printed
-directory. No sudo, no SELinux module or policy change (the host stays enforcing), no
-binder device, no partition, boot or flash change.
+- **The setcon stub worked** (operationally tested): system_server passed the label
+  switch, started its own ART runtime (`Using generational CollectorTypeCMC GC`) and
+  reached `ZygoteInit.zygoteInit` -> `nativeZygoteInit` -> `AppRuntime::onZygoteInit`
+  -> `ProcessState::init`. The preload loaded from `/data/local/tmp/gbos/` even though
+  the first six printed permitted paths did not show `/data`.
+- **Stop: Binder.** `Binder driver '/dev/binder' could not be opened. Error: 2 (No such
+  file or directory)`. This is the expected Binder milestone: system_server's first
+  native step after the fork is opening Binder.
+- The property-service stand-in ran; the only request received was `logd.ready=true`
+  (from logd). system_server stopped before setting any property.
 
-What changes, both clearly test-only stand-ins:
-- `asahi/sandbox-setcon-shim.c`: a dependency-free library exporting
-  `selinux_android_setcon()` that returns success without writing, the same result
-  `selinux_android_setcontext()` already gives in this sandbox. zygote preloads it
-  with `LD_PRELOAD` from `/data/local/tmp/gbos/`. The run prints the linker
-  namespace's permitted paths so a refused preload is visible.
-- `asahi/sandbox-property-service.py`: listens on `/dev/socket/property_service`
-  (protocol 2, announced with `ro.property_service.version=2`) and writes set
-  requests into the property area in Bionic's layout and update order. Existing
-  `ro.*` values are refused as init does; `ctl.*` requests are logged but start
-  nothing. Every request is listed after the run. This is there because
-  system_server sets properties early in startup and treats a failed set as fatal.
+## Next action: bring-up stage B6a, Binder and the real servicemanager in the zygote sandbox (needs your approval)
 
-Expected: system_server passes the label switch, starts Java (`SystemServer`) and
-stops at its first binder use (servicemanager), which needs its own step. The new
-output sections list the property requests and the system_server log lines.
-
-```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
-```
-
-Its first line reads `=== BRING-UP THREAD, STAGE B5a`. Paste only the command output
-(not the prompt line) into this thread, "Remaining steps to boot Android".
+Not yet published as a command. It would combine this sandbox with the arrangement of
+the completed real-servicemanager stages (5-8): a private binderfs with `binder`,
+`hwbinder` and `vndbinder`, and the image's own servicemanager started in the
+temporary `gbos_binder_probe_t` domain. That means installing the same temporary
+`gbos_binder_probe` SELinux module with `sudo semodule -i`, permissive for that one
+domain only, plus binder `call`/`transfer` between unconfined processes and that
+domain. Fedora stays enforcing; the run removes the module at the end. It is a host
+policy change, so it waits for an explicit yes in the "Remaining steps to boot
+Android" thread.
 
 ## Next action: ART / apex / zygote scan (read-only)
 
