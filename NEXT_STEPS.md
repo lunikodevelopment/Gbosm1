@@ -1060,6 +1060,58 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
+## Graphics stage 0: read-only evidence (queued, independent of Binder work)
+
+Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
+(Mesa Asahi GLES plus Honeykrisp built for Android, a GBM-backed minigbm
+allocator/mapper, AOSP drm_hwcomposer on `apple-drm`). This is a plan, not a
+result; nothing in it has been built. Stage 0 decides whether the buffer and
+display path it assumes exists. These steps can run before or after the Binder
+steps above; neither depends on the other.
+
+**THIS STEP MODIFIES STORAGE** (step 3 only)
+
+Steps 1 and 2 only read. Step 3 creates one new `work/asahi/graphics-image-*`
+report directory and reads the recovery image; delete that directory to
+reverse it. Nothing is installed except, if missing, the `drm_info` package.
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+
+# 1. Vulkan extensions already saved by the completed probe (read-only).
+grep -E 'api=|driver id|external_memory|drm_format_modifier|external_semaphore|external_fence|queue_family_foreign|ycbcr|swapchain' \
+  work/asahi/results-7EXxM0au/capabilities.log work/asahi/results-7EXxM0au/readback.log
+
+# 2. Display planes, formats and modifiers (read-only; no mode is set).
+#    Install drm_info first if it is missing: sudo dnf install drm_info
+drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
+#    If it reports permission denied on card2, rerun read-only with sudo:
+#    sudo drm_info 2>&1 | tee /tmp/drm_info.txt | head -400
+
+# 3. Image GPU driver files and graphics properties (static; nothing executed).
+python3 asahi/inspect-graphics-image.py
+```
+
+Send: the step 1 grep output, `/tmp/drm_info.txt` (it contains device and
+display details; review before sharing publicly), and the step 3
+`summary.json`.
+
+What the results decide:
+
+- Step 1: whether Honeykrisp exposes `VK_EXT_external_memory_dma_buf`,
+  `VK_EXT_image_drm_format_modifier` and fd semaphore/fence export. All three
+  are needed for Android buffer import through Mesa; if any is missing the plan
+  changes before any build.
+- Step 2: which formats and modifiers the `apple-drm` primary plane accepts,
+  whether it is atomic, and whether it has overlay planes and fence properties
+  (`IN_FENCE_FD`, `OUT_FENCE_PTR`). Until this is read, the plan assumes linear
+  XRGB8888 on one plane.
+- Step 3: whether the image ships ANGLE or prefers it, and which EGL/Vulkan
+  property values the vendor Mesa build must replace.
+
+Stage 1 (a native GBM to Vulkan dma-buf round trip on Fedora) is new code and
+will be added only after these results.
+
 ## Later milestones
 
 Use the report to select the next focused work:
@@ -1068,6 +1120,7 @@ Use the report to select the next focused work:
    handling before real Android servicemanager or HAL integration.
 2. Select an Asahi allocator/mapper/composer and Android Mesa development
    milestone using matching kernel sources and actual buffer/fence requirements.
+   Planned in the graphics stage 0 section above.
 3. Review a recoverable standalone boot approach only after userspace/kernel
    integration has been demonstrated.
 
