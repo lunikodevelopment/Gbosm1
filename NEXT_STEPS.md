@@ -2283,7 +2283,7 @@ The recovery ZIP and raw image were verified against `lib.sh` pins:
 - ZIP: `cb68dd6dbd73e568cfeecca0cbd4ceb23338640814dc3ee52aba5507e5a645d7`
 - Raw: `b0fd614ffe1a088fa3451a4b81c55a73f83e246286184a46ca306250db9af1f1`
 
-## Graphics: stages 0, 1, 2 and 3a-3i complete; stage 3j (build aidl) is next
+## Graphics: stages 0, 1, 2 and 3a-3j complete; stage 3k (check the service build) is next
 
 Plan: [Asahi graphics stack plan](https://claude.ai/code/artifact/52353ab5-12b6-4f59-91e2-a80f80e1eaf8)
 (Honeykrisp built for Android, the image's ANGLE for GLES, a GBM-backed minigbm
@@ -2321,61 +2321,62 @@ for drm_hwcomposer, and a second (overlay) plane is available later. Nothing has
 been committed to the display; Stage 5 still needs DRM master, which GNOME
 holds.
 
-### Next: Graphics stage 3j, build AOSP's `aidl` natively and generate the allocator code
+### Next: Graphics stage 3k, check what the allocator service and mapper still need
 
-Stage 3i (below) showed `aidl` is a small, self-contained C++ program, so this
-step builds it without Soong: Fedora clang++ compiles the `libaidl-common`
-sources plus `main.cpp`, the lexer and parser come from `flex` and `bison`
-(both installed), and the needed `libbase` files are compiled alongside. It
-then runs the fresh `aidl` with `--lang=ndk --structured --stability=vintf`
-over the frozen allocator V2 snapshot and the graphics-common and
-`android.hardware.common` snapshots (imports resolved from those trees, version
-and hash taken from each snapshot's `.hash`), writing the C++ NDK-backend
-headers and sources the service and mapper include. Nothing in the allocator
-service or mapper is compiled yet. I have not been able to compile any of this
-here (AOSP sources are fetched only on your machine), so compile errors in the
-first run are likely; the report lists each failing unit with its first error
-lines, and I will fix them from that.
+Stage 3j gives us generated AIDL code, so this step asks the compiler what is
+still missing for the AOSP minigbm sources that implement the allocator
+service (`cros_gralloc/aidl`), the stable-C mapper (`mapper_stablec`) and the
+`cros_gralloc` core. It runs a syntax-only compile for Android arm64 against
+the stage 2c NDK sysroot, the stage 3i trees (every `include*` directory in
+them), the stage 3j generated headers and the stage 3e shims, then lists every
+missing header and whether it exists anywhere in the fetched trees. Nothing is
+built into objects or run; I expect many missing headers on the first pass
+(for example gralloc types, Binder NDK platform headers, `BufferAllocator`),
+and the list decides the next fetch or shim. I have not been able to run it
+here.
 
 **THIS STEP MODIFIES STORAGE**
 
-Creates one new `work/asahi/aidl-build-*` directory: object files, the built
-`aidl` binary, the generated code and `report.txt`. The stage 3i sources are
-only read. Delete the directory to reverse. Nothing is downloaded.
-
-First run (reported): every unit failed on `fmt/chrono.h` not found (libbase
-needs the fmt headers), `android/log.h` was not on the include path (fixed
-from the stage 3i `liblog` checkout), and `libbase/properties.cpp` does not
-build with this libstdc++ (dropped; `aidl` should not need it). Rerun after one
-package install (the only system change; reverse with `sudo dnf remove fmt-devel`):
+Creates one new `work/asahi/gralloc-check-*` directory with compiler logs and
+`report.txt`. Earlier results are only read; nothing is installed. Delete the
+directory to reverse.
 
 ```bash
-sudo dnf install fmt-devel
-```
-
-Second and third runs (reported): fmt-devel installed, and 33 of 34 units
-compiled. Only `aidl_checkapi.cpp` failed: it uses real gtest assertions
-(`testing::`, `EqHelper`), so a stub header is not enough. The script now uses
-the real gtest and links `-lgtest`. One more package install (reverse with
-`sudo dnf remove gtest-devel`):
-
-```bash
-sudo dnf install gtest-devel
 cd ~/Gbosm1 && git pull --ff-only
-bash asahi/build-aidl-host.sh
+bash asahi/check-gralloc-service-build.sh
 ```
-
-Third run (reported): gtest-devel installed and all 51 objects compiled. The
-link failed on `__android_log_*` symbols (libbase logging needs liblog). The
-script now also compiles `asahi/liblog-host-shim.cpp`, a small original
-stand-in that logs to stderr. No new packages; rerun the same two lines
-(`git pull --ff-only`, `bash asahi/build-aidl-host.sh`) and send `report.txt`.
-
-Fourth run (reported): 52 objects compiled; the link lacked one fmt symbol
-(`fmt::vformat`). The script now links `-lfmt` (from the installed fmt-devel).
-Same two rerun lines, then send `report.txt`.
 
 Send the printed `report.txt`.
+
+### Result: Graphics stage 3j, native `aidl` build and allocator code generation
+
+Reported by the user from `work/asahi/aidl-build-CkSKSyAu` (final run, after
+five fixes: `fmt-devel` and `gtest-devel` installed with dnf, a `liblog` include
+path, `libbase/properties.cpp` dropped, an original host `liblog` stand-in in
+`asahi/liblog-host-shim.cpp`, and `-lfmt -lgtest` at link). Sources:
+`system/tools/aidl` 5bde6fcf (2025-03-20), `system/libbase` 0ac7ea4a
+(2025-03-24), `hardware/interfaces` 5688f7eb (2025-04-22), branch
+android16-release.
+
+- Operationally tested on the M1: the Fedora clang++ build compiled 52
+  objects and linked a working `aidl` host binary (it printed its usage text;
+  it reports platform SDK version unknown, which is expected for a Soong-less
+  build).
+- Operationally tested: with `--lang=ndk --structured --stability=vintf` it
+  generated C++ NDK-backend code for `android.hardware.common` version 2
+  (hash c32ddfdeb69c6e4a8a45519e6f9a39c4b66fd99f),
+  `android.hardware.graphics.common` version 6 (hash
+  77f2fb445fe7fefedad217ef45a1151c8e7fdaa8) and
+  `android.hardware.graphics.allocator` version 2 (hash
+  9499fec09c544e9de5be3c87125721600f8ade66): 140 files, including
+  `IAllocator.cpp/.h`, `BnAllocator.h`, `BpAllocator.h`, `AllocationResult`,
+  `BufferDescriptorInfo` and the graphics-common types.
+- Frozen versions present: allocator 1, 2, current; graphics.common 1-6,
+  current; hardware.common 1, 2, current.
+- Not done: the generated code has not been compiled, linked or run, and the
+  allocator service and mapper have not been built. The generated output is
+  from AOSP sources, so keep the AOSP licence notices in any redistributed
+  copy.
 
 ### Result: Graphics stage 3i, AOSP sources (fetched, not built)
 
