@@ -9,10 +9,87 @@ libbinder's empty-list request/reply all passed on Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: retain the completed result below; this probe does not need to be
-rerun. The next integration milestone is Binder object/FD transfer before a
-real Android servicemanager or HAL workload. No new execution command is issued
-by this log review.
+Next action: run the native Binder object/FD prerequisite below. Its source and
+runner are implemented; target execution remains pending. Retain the completed
+Android libbinder result; its empty-list probe does not need to be rerun.
+
+## One command: native Binder object and FD transfer
+
+**THIS STEP MODIFIES STORAGE**
+
+Git updates source in `~/Gbosm1`, preserving history and stopping on conflicts.
+The runner creates a new `work/asahi/binder-transfer-probe-*` directory with a
+native executable, generated policy, report and logs. Existing images and
+reports are retained. It creates an anonymous, sealed 16 KiB memory file in RAM;
+it does not write a disk image or open a GPU/display device. Namespace/process
+exit releases this memory file and the private Binder mount.
+
+As in the completed milestones, sudo temporarily installs the dedicated
+`gbos_binder_probe` module and labels only the new executable. This affects the
+active policy and policy store until cleanup; interruption may leave that module
+or label in place. The runner restores the label and removes the module in its
+cleanup path and refuses a preexisting module. SELinux stays enforcing.
+
+For this mode only, the generated policy adds Binder **transfer** from the
+dedicated server domain to `unconfined_t`, allowing the returned local object to
+become a client handle. It also permits the server to read/getattr/map the actual
+client-created memfd type observed before policy installation. Existing inherited
+`fd use` and Binder call rules cover the FD and callback. These are type-wide
+SELinux rules, not per-file rules; they add no transferred-file write/execute
+permission and no DMA-BUF or graphics access. The generated CIL is retained.
+
+Run as `gbos_user`; sudo is used only for the scoped policy/label and audit-log
+operations. No package installation is part of this command:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/probe-binder.py --temporary-policy --object-fd
+```
+
+The command uses private user/mount/PID namespaces and a new Binder device.
+It runs **two native Linux processes**. This mode does not execute an Android
+binary or repeat recovery/runtime extraction. The server registers its context
+manager using `BINDER_SET_CONTEXT_MGR_EXT` with explicit FD acceptance. It
+performs these checks:
+
+1. The client creates a memfd **after** the server fork, writes a deterministic
+   16384-byte pattern, applies write/grow/shrink/seal seals, and sends its FD
+   through a Binder transaction. It first reopens the sealed file read-only
+   through private `/proc/self/fd` and closes the original writable descriptor;
+   a seal alone does not change the FD access mode. The server cannot inherit
+   that file.
+2. The server verifies the received file size, complete contents via both a
+   read-only shared mapping and pread, seals, read-only access mode and
+   close-on-exec flag.
+3. The server returns that FD together with a local Binder object. The client
+   verifies a separately installed FD, matching file device/inode identity and
+   contents, and translation of the local object to a nonzero handle.
+4. The client retains the strong handle before freeing its reply buffer, calls
+   it, and verifies the reply. The server verifies the original object pointer,
+   cookie and call payload. Reference acquire/incref notifications are acknowledged.
+5. The client releases the handle and sends a final acknowledgement through the
+   context manager. Both processes close their resources and exit; the runner
+   then restores the executable label and removes the temporary module.
+
+Expected markers: `BINDER_FD_SERVER=PASS`, `BINDER_FD_CLIENT=PASS`,
+`BINDER_OBJECT_SERVER=PASS`, `BINDER_OBJECT_CLIENT=PASS`,
+`BINDER_TRANSFER_SERVER=PASS` and `BINDER_TRANSFER=PASS`, with execution and
+overall exit 0 and both policy/label cleanup codes 0. The runtime memfd type
+must match the type used in the generated policy. Unknown layouts, driver
+errors, denied operations or timeouts stop with retained reports.
+
+**Reversal:** confirm context restoration and module removal returned 0. If
+interrupted, restore only the new executable's recorded original context before
+removing `gbos_binder_probe`, using the cleanup instructions retained below.
+After cleanup, deleting only the new printed result directory reverses generated
+files. Source versions remain recoverable in Git. No partition, boot policy or
+existing Binder device is changed by this step.
+
+After it finishes, say **get logs**. I will retrieve this run's report and
+summary from the HTTP directory listing. A pass establishes one native Binder
+object call and a sealed memfd round trip on the running kernel. Android object/
+FD Parcel handling, DMA-BUF allocation/sharing, fences, death notifications,
+complete object lifetimes, real servicemanager, HALs and graphics remain later
+milestones.
 
 ## Completed Android libbinder milestone
 
