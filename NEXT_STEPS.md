@@ -2653,6 +2653,17 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-gralloc-service.sh
 ```
 
+Third run (reported, `gralloc-build-6fSippQw`): compile still clean (43
+objects), but linking the 57 minigbm objects gave duplicate symbols
+(`backend_mock`, `drv_array_*`, ...): the stage 3e build tree holds mock/test
+and repeated objects, not only the library. The script now keeps one object per
+file name, drops mock/test objects and prints the list it uses. Rerun:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-gralloc-service.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation

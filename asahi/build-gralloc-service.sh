@@ -74,7 +74,10 @@ LDF="$TC -nostdlib++ -fuse-ld=lld -Wl,-z,max-page-size=16384 -Wl,--allow-shlib-u
 SYS="-lbinder_ndk -llog -landroid -lm"
 # cros_gralloc calls minigbm's internal drv_* functions, which the shared libminigbm does not export, so the
 # minigbm objects from stage 3e are linked in directly (as AOSP's own gralloc build does).
-MGOBJ=$(find "$MGB/minigbm-build" -name '*.o' 2>/dev/null | sort)
+# The build tree holds more than libminigbm (test and mock objects, repeated copies), so keep one object per
+# base name and drop anything test- or mock-related.
+MGOBJ=$(find "$MGB/minigbm-build" -name '*.o' 2>/dev/null | sort | grep -v -i -E 'mock|test|gbm_unit|\.test\.' | awk -F/ '!seen[$NF]++')
+echo "$MGOBJ" | sed "s|$MGB/||" | sed 's/^/  mgobj /' 
 echo "minigbm objects from stage 3e: $(echo "$MGOBJ" | grep -c .)"
 MGLIB=$MGOBJ; DRMLIB=$MGB/lib64/libdrm.so
 SVC=$(ls "$OUT"/obj/svc_aidl_*.o "$OUT"/obj/core_*.o "$OUT"/obj/gen_*.o "$OUT"/obj/support_*.o 2>/dev/null)
