@@ -2302,6 +2302,13 @@ package install (the only system change; reverse with `sudo dnf remove fmt-devel
 
 ```bash
 sudo dnf install fmt-devel
+```
+
+Second run (reported): fmt-devel installed, and 33 of 34 units compiled.
+Only `aidl_checkapi.cpp` failed (`gtest/gtest.h`); the script now stubs that
+header. fmt is already installed, so rerun without the dnf line:
+
+```bash
 cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-aidl-host.sh
 ```

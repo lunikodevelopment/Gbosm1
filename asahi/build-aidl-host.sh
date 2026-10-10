@@ -26,6 +26,7 @@ git -C "$HI" log -1 --format='hardware/interfaces COMMIT %H %cI'
 mkdir -p "$OUT/obj" "$OUT/gen-parser" "$OUT/stubs/gtest"
 # Test-only header some includes may name; harmless if unused.
 printf '#pragma once\n#define FRIEND_TEST(test_case_name, test_name) friend class test_case_name##_##test_name##_Test\n' > "$OUT/stubs/gtest/gtest_prod.h"
+printf '#pragma once\n#include <gtest/gtest_prod.h>\n' > "$OUT/stubs/gtest/gtest.h"
 
 echo '== Lexer and parser'
 bison -d -o "$OUT/gen-parser/aidl_language_y.cpp" "$A/aidl_language_y.yy" 2>&1 | tail -5
