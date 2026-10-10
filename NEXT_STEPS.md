@@ -18,7 +18,7 @@ apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
 Bring-up track (separate thread): run the zygote preload test ("Next action:
-bring-up stage B5e", below) and paste its output.
+bring-up stage B5f", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -842,18 +842,32 @@ Operationally tested on the M1:
   of the btrfs `/home` subvolume (read-only). The `readlink` line printed nothing, so
   the path an open file reports under `chroot` is still unproven.
 
-## Next action: bring-up stage B5e, pivot_root in the launcher's own mount namespace
+## Results: bring-up stage B5e (`root-smoke-x2pbcgbx`; reported by the user)
 
-**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5d: the
+- **`pivot_root` fixed the path problem** (operationally tested): the launcher printed
+  `root entered with pivot_root`, and the stack dump and log now show device paths
+  (`/apex/com.android.art/lib64/libart.so`, `/system/lib64/libandroid_runtime.so`).
+  The earlier refusal of `core-oj.jar` is gone.
+- **The next refusal is a different descriptor**: `JNI FatalError called: (system_server)
+  Not allowlisted (60): /` raised in `FileDescriptorInfo::CreateFromFd`, called from
+  `FileDescriptorTable::Create` in `ForkCommon`. Zygote holds an open descriptor (number 60)
+  on the directory `/`; the allowlist has no entry for it. Who opened it is not known:
+  zygote's own code, ART, or something this test left open (the launcher's `pivot_root`
+  leaves no descriptor behind, which I have not verified).
+- The earlier credential and `setpriority` messages are warnings only.
+
+## Next action: bring-up stage B5f, find which call opened the descriptor on `/`
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Same scope as B5e: the
 rewritten `apex/apex-info-list.xml` and one `work/asahi/root-smoke-*` directory
 (logs, trace); private tmpfs takes the rest. Loss: none. Reversal: delete the
 printed directory. No sudo, no SELinux module, no binder device, no partition, boot
 or flash change.
 
-What changes: the zygote launcher first moves into its own copy of the mount
-namespace (`unshare(CLONE_NEWNS)`, then `/` made private) and only then calls
-`pivot_root`, so the test script keeps its tools. A local test in a throwaway
-namespace showed the parent still sees `/usr` after the child pivots.
+What changes: no code path changes. The run now also prints the descriptor number
+from the log's "Not allowlisted" line, the trace line that returned that number (which
+call opened it, in which process) and every `openat` of `/` in the trace, so the next
+fix targets the real opener.
 
 ```bash
 cd ~/Gbosm1 && git pull --ff-only && python3 asahi/smoke-zygote.py --system-server
