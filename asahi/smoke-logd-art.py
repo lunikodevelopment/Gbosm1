@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Second chroot smoke test: logd with passed-in sockets, linker config diagnosis, derive_classpath, ART.
+"""Third chroot smoke test: property area, logd with passed-in sockets, linker config diagnosis, derive_classpath, ART.
 
 Original project script; same sandbox as smoke-in-root.py (read-only tree, private
 tmpfs mounts, user namespace with the /etc/subuid range, PID namespace). New here:
+- a single-file property area built from the image's build.prop files by make-property-area.py
+  (plus logd.ready, servicemanager.ready and apexd.status), so liblog, logcat and linkerconfig can read properties;
 - a launcher (this file, `--launch`) creates logd's three sockets in /dev/socket,
   hands them to the image's `logd` through ANDROID_SOCKET_<name> exactly as Android's
   init does, and runs logd as uid/gid 1036 with its supplementary groups;
@@ -23,7 +25,7 @@ import tempfile
 SOCKETS = [("logd", socket.SOCK_STREAM, 0o666), ("logdr", socket.SOCK_SEQPACKET, 0o666), ("logdw", socket.SOCK_DGRAM, 0o222)]
 
 SCRIPT = r'''#!/bin/bash
-ROOT="$1"; OUT="$2"; PY="$3"; SELF="$4"
+ROOT="$1"; OUT="$2"; PY="$3"; SELF="$4"; PROPS="$5"
 say() { printf '\n### %s\n' "$*"; }
 mount --bind "$ROOT" "$ROOT" && mount -o remount,bind,ro "$ROOT" || { echo "FATAL: read-only bind of the tree failed"; exit 1; }
 for d in dev data tmp linkerconfig mnt; do
@@ -41,38 +43,44 @@ BASEENV=(ANDROID_ROOT=/system ANDROID_DATA=/data ANDROID_STORAGE=/storage ANDROI
   PATH=/apex/com.android.art/bin:/apex/com.android.runtime/bin:/system/bin:/system/xbin:/vendor/bin)
 inroot() { timeout 120 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "$@" 2>&1; }
 trimmed() { "$@" | head -n "${LINES_MAX:-40}"; echo "exit status: ${PIPESTATUS[0]}"; }
-lc_hide() { mkdir -p "$OUT/lc-saved"; cp -a "$ROOT/linkerconfig/." "$OUT/lc-saved/"; umount "$ROOT/linkerconfig"; mount -t tmpfs -o mode=0755 tmpfs "$ROOT/linkerconfig"; }
-lc_restore() { umount "$ROOT/linkerconfig"; mount -t tmpfs -o mode=0755 tmpfs "$ROOT/linkerconfig"; cp -a "$OUT/lc-saved/." "$ROOT/linkerconfig/"; }
 echo "mounts ready"
 
-say "S1 linkerconfig"
-trimmed inroot /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig
-ls -l "$ROOT/linkerconfig" | head -n 6
+say "S0 property area (one regular file at /dev/__properties__, root-owned, 0444)"
+"$PY" "$PROPS" "$ROOT" "$ROOT/dev/__properties__" logd.ready=true servicemanager.ready=true apexd.status=ready \
+  ro.boottime.init=1 sys.boot_completed=0 2>&1 | cut -c1-300
+ls -ln "$ROOT/dev/__properties__" 2>&1
 
-say "S2 where is libnativehelper.so, and what does the generated config say about it"
-find "$ROOT/apex" "$ROOT/system/lib64" "$ROOT/system_ext/lib64" "$ROOT/vendor/lib64" -name 'libnativehelper*' 2>/dev/null | sed "s#$ROOT##" | head -n 10
-echo "--- sections and dir lines in ld.config.txt:"
-grep -n -E '^\[|^dir\.' "$ROOT/linkerconfig/ld.config.txt" | head -n 40
-echo "--- lines mentioning nativehelper:"
-grep -n -i 'nativehelper' "$ROOT/linkerconfig/ld.config.txt" | head -n 12
-echo "--- dir lines for the art apex:"
-grep -n -E 'com.android.art' "$ROOT/linkerconfig/ld.config.txt" | head -n 12
-
-say "S3 dalvikvm64 -help with the generated config, then with no generated config"
-LINES_MAX=6 trimmed inroot /apex/com.android.art/bin/dalvikvm64 -help
-lc_hide
-LINES_MAX=8 trimmed inroot /apex/com.android.art/bin/dalvikvm64 -help
-lc_restore
-
-say "S4 logd with sockets passed in (as init does), uid 1036"
+say "S1 logd with sockets passed in (as init does), uid 1036"
 "$PY" "$SELF" --launch "$ROOT" > "$OUT/logd.out" 2>&1 &
 LOGDPID=$!
 sleep 3
-if kill -0 "$LOGDPID" 2>/dev/null; then echo "logd launcher/process still running (pid $LOGDPID)"; else echo "logd EXITED"; fi
-echo "--- logd output:"; head -n 20 "$OUT/logd.out"
+if kill -0 "$LOGDPID" 2>/dev/null; then echo "logd still running (pid $LOGDPID)"; else echo "logd EXITED"; fi
+echo "--- logd output:"; head -n 20 "$OUT/logd.out" | cut -c1-240
 ls -l "$ROOT/dev/socket" | head -n 8
+echo "--- getprop through the image's own getprop:"
+trimmed inroot /system/bin/getprop ro.build.version.sdk
+trimmed inroot /system/bin/getprop logd.ready
 
-say "S5 derive_classpath again, with strace; then what the log recorded"
+say "S2 linkerconfig under strace, then what it produced and what the log recorded"
+if command -v strace >/dev/null 2>&1; then
+  timeout 120 strace -f -s 200 -o "$OUT/linkerconfig.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" \
+    /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig 2>&1 | head -n 10
+  echo "exit status: ${PIPESTATUS[0]}"
+  echo "--- distinct failed opens/stats in the trace (first 30):"
+  grep -E '= -1 E(NOENT|ACCES|PERM|INVAL)' "$OUT/linkerconfig.trace" | grep -E 'open|stat|access' | sed -E 's/^[0-9]+ +//' | cut -c1-170 | sort -u | head -n 30
+else
+  trimmed inroot /apex/com.android.runtime/bin/linkerconfig --target /linkerconfig
+fi
+echo "--- /linkerconfig tree:"
+(cd "$ROOT/linkerconfig" && find . -maxdepth 2 | sort | head -n 40)
+echo "--- logcat -d (last 25):"
+timeout 30 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/logcat -d 2>&1 | tail -n 25 | cut -c1-240
+
+say "S3 dalvikvm64 -help (uses /linkerconfig/com.android.art/ld.config.txt if it exists)"
+ls -l "$ROOT/linkerconfig/com.android.art" 2>&1 | head -n 4
+LINES_MAX=6 trimmed inroot /apex/com.android.art/bin/dalvikvm64 -help
+
+say "S4 derive_classpath, with strace; then what the log recorded"
 if command -v strace >/dev/null 2>&1; then
   timeout 90 strace -f -s 200 -o "$OUT/derive.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" \
     /apex/com.android.sdkext/bin/derive_classpath /data/system/environ/classpath 2>&1 | head -n 10
@@ -91,7 +99,7 @@ if [ -f "$ROOT/data/system/environ/classpath" ]; then
 fi
 IMG=/system/framework/arm64/boot.art
 BCP=""; for e in "${CPENV[@]}"; do case "$e" in BOOTCLASSPATH=*) BCP="${e#BOOTCLASSPATH=}";; esac; done
-say "S6 dalvikvm64 start with $IMG and a main class that does not exist"
+say "S5 dalvikvm64 start with $IMG and a main class that does not exist"
 if [ -n "$BCP" ]; then
   timeout 150 strace -f -s 160 -o "$OUT/art.trace" chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" "${CPENV[@]}" \
     /apex/com.android.art/bin/dalvikvm64 -Xbootclasspath:"$BCP" -Ximage:"$IMG" -Xnorelocate -Xusejit:false \
@@ -112,6 +120,7 @@ def launch(root):
     sockets = Path(root) / "dev/socket"
     sockets.mkdir(parents=True, exist_ok=True)
     env = {"ANDROID_ROOT": "/system", "ANDROID_DATA": "/data", "PATH": "/system/bin"}
+    keep = []
     for name, kind, mode in SOCKETS:
         s = socket.socket(socket.AF_UNIX, kind)
         path = str(sockets / name)
@@ -123,9 +132,11 @@ def launch(root):
         if kind == socket.SOCK_DGRAM:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
         os.set_inheritable(s.fileno(), True)
+        keep.append(s)  # an unreferenced socket would be closed and its fd number reused
         env[f"ANDROID_SOCKET_{name}"] = str(s.fileno())
         print(f"socket {name}: fd {s.fileno()} mode {mode:o}", flush=True)
-    os.execvpe("chroot", ["chroot", "--userspec=1036:1036", "--groups=1000,1032,3009", str(root), "/system/bin/logd"], env)
+    chroot = shutil.which("chroot") or "/usr/sbin/chroot"
+    os.execve(chroot, ["chroot", "--userspec=1036:1036", "--groups=1000,1032,3009", str(root), "/system/bin/logd"], env)
 
 
 def main():
@@ -133,7 +144,7 @@ def main():
         launch(sys.argv[2])
     if os.geteuid() == 0:
         sys.exit("run as your ordinary user, without sudo")
-    print("=== BRING-UP THREAD, STAGE B3b: LOGD, LINKER CONFIG, DERIVE_CLASSPATH, ART (paste in the \"Remaining steps to boot Android\" thread) ===")
+    print("=== BRING-UP THREAD, STAGE B3c: PROPERTY AREA, LOGD, LINKER CONFIG, DERIVE_CLASSPATH, ART (paste in the \"Remaining steps to boot Android\" thread) ===")
     trees = sorted(Path("work/asahi").glob("android-root-*/root"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not trees:
         sys.exit("no extracted tree; run extract-android-root.py first")
@@ -149,7 +160,8 @@ def main():
     script = out / "run.sh"
     script.write_text(SCRIPT)
     command = ["unshare", "--user", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--propagation", "private",
-               "bash", str(script), str(root), str(out), shutil.which("python3") or "python3", str(Path(__file__).resolve())]
+               "bash", str(script), str(root), str(out), shutil.which("python3") or "python3", str(Path(__file__).resolve()),
+               str(Path(__file__).with_name("make-property-area.py").resolve())]
     done = subprocess.run(command, capture_output=True, text=True, timeout=900)
     text = done.stdout + done.stderr
     (out / "log.txt").write_text(text)
