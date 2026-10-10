@@ -2580,6 +2580,26 @@ cd ~/Gbosm1 && git pull --ff-only
 bash asahi/build-gralloc-service.sh
 ```
 
+Second run (reported, `gralloc-build-6bB1Bfrv`): all 43 objects compiled and
+`mapper.minigbm.so` linked (AArch64 shared object exporting
+`AIMapper_loadIMapper`; enumerated only, not loaded or run), but the allocator
+service link failed and the mapper has hidden gaps, because the link allows
+unresolved symbols in shared libraries. Two causes: (1) `cros_gralloc` calls
+minigbm's internal `drv_*` functions, which the shared `libminigbm` does not
+export, so the stage 3e minigbm object files are now linked in directly;
+(2) the image's C++ libraries use `std::__1` while the NDK headers use
+`std::__ndk1` (`hidl_string::operator std::string` was undefined), so the
+script now compiles with `-D_LIBCPP_ABI_NAMESPACE=__1` and links the image's
+`libc++.so` instead of the NDK one. Also found: the image has `libbase`,
+`libcutils`, `libhidlbase`, `libgralloctypes`, `libutils`, `libhwbinder`,
+`libvndksupport`, `libsync` and the HIDL `mapper@4.0`/`common@1.0-1.2`
+libraries. Rerun:
+
+```bash
+cd ~/Gbosm1 && git pull --ff-only
+bash asahi/build-gralloc-service.sh
+```
+
 Send the printed `report.txt`.
 
 ### Result: Graphics stage 3m, native `hidl-gen` build and HIDL header generation

@@ -34,7 +34,7 @@ IFLAGS=; for d in $INCS; do IFLAGS="$IFLAGS -I$d"; done
 for d in "$W"/aosp-gralloc-more-*/system_libfmq/base; do [[ -d $d ]] && IFLAGS="$IFLAGS -I$d"; done
 LIBDRM_SRC=$(dirname "$LIBDRM_H")
 TC="--target=aarch64-linux-android35 --sysroot=$HK/ndk/sysroot -resource-dir=$HK/clang-resource"
-CXXF="$TC -std=gnu++20 -fPIC -O1 -w -DANDROID -D__ANDROID_VNDK__ -D__ANDROID_VENDOR__ -D_GNU_SOURCE -DDRV_APPLE \
+CXXF="$TC -std=gnu++20 -fPIC -O1 -w -D_LIBCPP_ABI_NAMESPACE=__1 -DANDROID -D__ANDROID_VNDK__ -D__ANDROID_VENDOR__ -D_GNU_SOURCE -DDRV_APPLE \
  -I$GEN/generated/include -I$HIDL/generated -I$HIDL/system_libhwbinder/include -I$MORE/generated \
  -I$ROOT/asahi/android-shims -I$LIBDRM_SRC -I$LIBDRM_SRC/include/drm -I$MG -I$MG/cros_gralloc $IFLAGS"
 export OUT CXXF
@@ -63,14 +63,20 @@ echo "Compiled $(ls "$OUT"/obj/*.o | wc -l) objects."
 
 echo '== Which libraries the image provides'
 LIBS=
-for n in base cutils hidlbase gralloctypes utils hwbinder vndksupport sync android.hardware.graphics.mapper@4.0 android.hardware.graphics.common@1.2 android.hardware.graphics.common@1.1 android.hardware.graphics.common@1.0 android.hidl.base@1.0; do
+for n in c++ base cutils hidlbase gralloctypes utils hwbinder vndksupport sync android.hardware.graphics.mapper@4.0 android.hardware.graphics.common@1.2 android.hardware.graphics.common@1.1 android.hardware.graphics.common@1.0 android.hidl.base@1.0; do
     if [[ -e $IMGLIB/lib$n.so ]]; then echo "found lib$n.so"; LIBS="$LIBS $IMGLIB/lib$n.so"
     elif [[ -e $IMGLIB/$n.so ]]; then echo "found $n.so"; LIBS="$LIBS $IMGLIB/$n.so"
     else echo "NOT IN IMAGE: $n"; fi
 done
-LDF="$TC -fuse-ld=lld -Wl,-z,max-page-size=16384 -Wl,--allow-shlib-undefined"
+# The image's C++ libraries (libbase, libhidlbase, libutils) use std::__1; the NDK headers default to std::__ndk1.
+# Compiling with -D_LIBCPP_ABI_NAMESPACE=__1 and linking the image's libc++.so keeps the types the same.
+LDF="$TC -nostdlib++ -fuse-ld=lld -Wl,-z,max-page-size=16384 -Wl,--allow-shlib-undefined"
 SYS="-lbinder_ndk -llog -landroid -lm"
-MGLIB=$MGB/lib64/libminigbm.so; DRMLIB=$MGB/lib64/libdrm.so
+# cros_gralloc calls minigbm's internal drv_* functions, which the shared libminigbm does not export, so the
+# minigbm objects from stage 3e are linked in directly (as AOSP's own gralloc build does).
+MGOBJ=$(find "$MGB/minigbm-build" -name '*.o' 2>/dev/null | sort)
+echo "minigbm objects from stage 3e: $(echo "$MGOBJ" | grep -c .)"
+MGLIB=$MGOBJ; DRMLIB=$MGB/lib64/libdrm.so
 SVC=$(ls "$OUT"/obj/svc_aidl_*.o "$OUT"/obj/core_*.o "$OUT"/obj/gen_*.o "$OUT"/obj/support_*.o 2>/dev/null)
 MAP=$(ls "$OUT"/obj/svc_mapper_*.o "$OUT"/obj/core_*.o "$OUT"/obj/gen_*.o "$OUT"/obj/support_*.o 2>/dev/null)
 echo '== Link allocator service'
