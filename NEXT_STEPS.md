@@ -10,28 +10,42 @@ Fedora Asahi ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: rerun the Android Parcel probe below with the corrected lookup
-reply. Retain the completed native object/FD and Android empty-list results;
-those probes do not need to be rerun.
+Next action: confirm the latest Android Parcel result with the read-only check
+below (receipt verification, exit statuses, cleanup). Retain all earlier results;
+no probe needs to be rerun.
 
-## Lookup reply: inner present word did not fix it
+## Android Parcel probe: markers passed with the 52-byte lookup reply
 
-`Parcel::readParcelable` in the image's libbinder (reported, 0x6c260) reads an
-int32 and decodes only if it is 1, else returns UNEXPECTED_NULL. The probe was
-changed to insert that word before the sized `ServiceWithMetadata` (48-byte
-reply). A confirmed run of that version (`PARCEL_LOOKUP_REPLY=READY: 48-byte
-reply ...`, commit 882722b, result directory
+Reported by the user (filtered output of commit 1605971): `PARCEL_LOOKUP_REPLY=READY: 52-byte
+reply ...`, `ANDROID_OBJECT_READ=PASS`, `ANDROID_FD_WRITE=PASS`,
+`PARCEL_ENDPOINT_REPLY=PASS` and `ANDROID_PARCEL=PASS`. The runner's own
+`android_receipt_verified`, exit statuses, cleanup codes and AVC query were not
+in the filtered output, so full success is not yet confirmed (see the check below).
+
+How it got there (provenance): the first lookup reply lacked a present word; adding the
+inner present word before the sized `ServiceWithMetadata` (48 bytes,
 `work/asahi/android-parcel-probe-3n45nvjg`) still ended with
-`Service gbos.parcel does not exist`. So the inner word was not the only fault.
+`Service gbos.parcel does not exist`. Adding the outer present word that the
+generated checkService2 client consumes before the `Service` union
+(status 0, present 1, tag 0, present 1, size 36, binder at offset 20 plus
+stability 12, lazy bool; 52 bytes) passed. The outer-word explanation is an
+inference from the failures and the pass, not read from `BpServiceManager::checkService2`.
 
-Working hypothesis, not verified against the image: the generated
-checkService2 client also reads the returned `Service` with `readParcelable`,
-which consumes a present word before the union's own tag (the union decoder
-reads its tag first, with no size). The previous reply put the union tag at
-offset 4, where that word would be read as 0. The probe now emits a 52-byte
-reply: status 0, present 1, tag 0, present 1, size 36, binder (offset 20) plus
-stability 12, lazy bool. This is untested; if it fails again, the checkService2
-client in `libbinder.so` (`BpServiceManager::checkService2`) needs reading.
+If confirmed, this establishes: the image's libbinder decoded a returned
+Binder object, called it, and serialized an outgoing FD Parcel that the native
+endpoint verified. It does not establish Android receiving or reading an FD,
+exporting a local Binder object, full lifetimes, death notifications, DMA-BUF,
+fences, real servicemanager, HALs, Android boot or graphics.
+
+### One command: confirm the latest Parcel result (read-only)
+
+No storage is modified. On the M1:
+
+```bash
+cd ~/Gbosm1/work/asahi && d=$(ls -dt android-parcel-probe-* | head -1) && echo "$d" && python3 -c 'import json,sys; s=json.load(open(sys.argv[1]+"/summary.json")); print({k:s.get(k) for k in ("exit_status","android_receipt_verified","cleanup","error")}); print(s.get("android_client_stdout"))' "$d" && grep -E 'exit status|AVC|no matches' "$d/report.txt" | tail -12
+```
+
+Say **get logs** with the output.
 
 ## One command: Android returned object and outgoing FD Parcel
 
