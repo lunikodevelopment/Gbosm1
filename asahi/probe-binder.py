@@ -19,6 +19,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--temporary-policy', action='store_true',
                         help='install a dedicated server policy for this attempt, then remove it')
+    parser.add_argument('--android-service', action='store_true',
+                        help='run the image service list client against a native empty-list stub')
     args = parser.parse_args()
     if not args.temporary_policy:
         parser.error('this revision requires --temporary-policy; see NEXT_STEPS.md for scope and reversal')
@@ -26,7 +28,10 @@ def main():
         sys.exit('Run as your ordinary user, without sudo.')
     if platform.system() != 'Linux' or platform.machine() not in ('aarch64', 'arm64') or os.sysconf('SC_PAGE_SIZE') != 16384:
         sys.exit('Requires the Fedora Asahi ARM64/16 KiB target.')
-    for tool in ('cc', 'unshare', 'runcon', 'sudo', 'semodule', 'chcon', 'ldd'):
+    required = ['cc', 'unshare', 'runcon', 'sudo', 'semodule', 'chcon', 'ldd']
+    if args.android_service:
+        required.append('dump.erofs')
+    for tool in required:
         if not shutil.which(tool):
             sys.exit(f'Missing {tool}; send this error. No packages were installed.')
     if Path('/sys/fs/selinux/enforce').read_text().strip() != '1':
@@ -43,10 +48,12 @@ def main():
     print('If interrupted during cleanup: sudo semodule -r gbos_binder_probe; see NEXT_STEPS.md.', flush=True)
     print('Existing files are retained. Delete the new result directory to reverse generated files.', flush=True)
     parent.mkdir(parents=True, exist_ok=True)
-    out = Path(tempfile.mkdtemp(prefix='binder-probe-', dir=parent)).resolve()
+    prefix = 'libbinder-probe-' if args.android_service else 'binder-probe-'
+    out = Path(tempfile.mkdtemp(prefix=prefix, dir=parent)).resolve()
     mountpoint = out / 'binderfs'
     mountpoint.mkdir()
-    source = Path(__file__).with_name('probe-binder.c').resolve()
+    source_name = 'probe-libbinder.c' if args.android_service else 'probe-binder.c'
+    source = Path(__file__).with_name(source_name).resolve()
     binary = out / 'binder-echo'
     lock = (parent / 'binder-policy.lock').open('a')
     try:
@@ -88,6 +95,15 @@ def main():
         return data
     try:
         log(f'Results: {out}')
+        if args.android_service:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('service_extract', Path(__file__).with_name('prepare-service.py'))
+            extraction = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(extraction)
+            result['android_runtime'] = extraction.prepare(out, log)
+            result['limitations'] = ['Android service list against a native empty-list stub only; no Android servicemanager or services are started.',
+                                    'Object/FD transfer, complete namespaces, VINTF, HALs and graphics remain untested.']
+            log('Temporary /dev overlay and Binder alias are private to the child mount namespace.')
         result['build'] = run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', str(source), '-o', str(binary)], 'build', 60)
         if result['build']['returncode']:
             raise RuntimeError('build stopped; retain diagnostics, no execution attempted')
@@ -166,8 +182,14 @@ def main():
         # util-linux isolates mount propagation; root privileges apply only inside the new user namespace.
         command = ['unshare', '--user', '--map-root-user', '--mount', '--propagation', 'private',
                    '--fork', '--kill-child', str(binary), str(mountpoint)]
-        result['execution'] = run(command, 'echo', 30)
-        if result['execution']['returncode'] or 'BINDER_ECHO=PASS' not in result['execution']['stdout']:
+        if args.android_service:
+            command.append(result['android_runtime']['runtime'])
+        result['execution'] = run(command, 'service-list' if args.android_service else 'echo', 40)
+        marker = 'LIBBINDER_LIST=PASS' if args.android_service else 'BINDER_ECHO=PASS'
+        output = result['execution']['stdout']
+        if args.android_service and ('LIBBINDER_STUB_REPLY=PASS' not in output or 'Found 0 services:' not in output):
+            raise RuntimeError('service client and stub did not both report expected results')
+        if result['execution']['returncode'] or marker not in output:
             raise RuntimeError('private Binder echo did not pass; retain namespace/mount/driver diagnostics')
         result['exit_status'] = 0
     except Exception as error:
