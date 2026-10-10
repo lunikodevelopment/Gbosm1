@@ -11,8 +11,9 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the remaining stage 4 fixture-directory listings below. Retain
-all earlier results; no completed probe needs rerunning.
+Next action: waiting for the user's go-ahead to build stage 5a (the real
+servicemanager first run, described in the design section). No command is queued.
+Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
 
@@ -141,19 +142,56 @@ Reported by the user (`work/asahi/servicemanager-inspect-8_p893ig`, `-p8kux7d8`,
   partition's root is the vendor tree itself, so the path inside it is
   `/etc/vintf`, not `/vendor/etc/vintf`. Not yet confirmed.
 
-### One command: list the remaining fixture directories (stage 4, read-only)
+### Stage 4 result: fixture inventory complete
 
-**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+Reported by the user (`work/asahi/servicemanager-inspect-4pxrh6i_`, `-b4br_469`,
+`-kg1n053n`):
 
-Scope: creates three new `work/asahi/servicemanager-inspect-*` directories with a
-`listing.txt` each. The image is only read; nothing is executed. Reversal:
-delete the newly printed result directories.
+- `vendor_a` is rooted at the vendor tree, so its paths are `/etc/...`, not
+  `/vendor/etc/...` (confirmed by the listings).
+- `vendor_a:/etc/vintf`: `manifest.xml`, `manifest/`, `compatibility_matrix.xml`.
+- `vendor_a:/etc/selinux`: `vendor_service_contexts`, `vndservice_contexts`,
+  `vendor_hwservice_contexts`, `vendor_tee_service_contexts`,
+  `vendor_property_contexts`, `precompiled_sepolicy` and others.
+- `system_a:/system/etc/vintf/manifest/`: 15 service manifest XML files
+  (stats, keystore2, netd, suspend, vold, desktop and snapshot services, media
+  C2, camera, devicestate, location, omapi, gscd).
 
-```bash
-cd ~/Gbosm1 && for spec in "vendor_a /etc/vintf" "vendor_a /etc/selinux" "system_a /system/etc/vintf/manifest"; do set -- $spec; python3 asahi/inspect-servicemanager.py --part $1 --path $2 --ls 2>&1 | grep -v 'THIS STEP\|Creates one\|Delete the'; done
-```
+So every fixture file named by the libselinux and libvintf strings has a source
+in the image, except the odm, product and system_ext copies, which were not
+listed (they may not exist; the real servicemanager may tolerate their absence,
+unconfirmed).
 
-Say **get logs** with the output.
+### Design problem and proposed approach for the first real run
+
+Not yet built or run; this is the plan for stages 4-5.
+
+- Problem: the image's code reads `/system/etc/vintf`, `/system/etc/selinux` and
+  `/vendor/etc/...` at fixed absolute paths. Fedora's root has no `/system` or
+  `/vendor` and an unprivileged user cannot create them; the existing probes only
+  mount over the existing `/dev`.
+- Approach: inside the existing private user+mount namespace, build a new root
+  directory under `work/asahi/<run>/root` containing copied fixtures at the
+  Android paths, read-only bind mounts of the Fedora directories the run needs
+  (`/usr`, `/lib64`, and the run's own work directory), private `/dev` and `/proc`,
+  and `chroot` into it. Nothing outside the run directory is written; the mounts
+  vanish with the namespace.
+- First run goal (stage 5a): start only the image's `servicemanager` as the
+  context manager, with the existing readiness handshake replaced by whatever it
+  needs, and capture its stderr and a syscall trace. No client yet. Expected
+  outcomes include "ready", a clean refusal naming the missing piece, or a crash;
+  all are evidence.
+- Property service: `servicemanager.ready` is set through the property service
+  socket. Stage 5a records what it attempts; a native stand-in is built only if
+  the trace shows it is the blocker.
+- SELinux: per the stage 2/3 reading, no module is expected for the unknown-class
+  check. If the first run shows denials, the existing temporary-module pattern
+  with an explicit scope statement is the only tool used.
+
+Before building 5a the user's go-ahead is requested: it adds a new native
+launcher and a new probe mode, and each run modifies storage the same way
+earlier probes did (new result directory, temporary policy module and label,
+restored afterward).
 
 ## Completed inspection: the image's servicemanager (read-only)
 
