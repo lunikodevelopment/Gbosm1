@@ -55,8 +55,8 @@ CPENV=()
 while read -r a b c; do [ "$a" = export ] && CPENV+=("$b=$c"); done < "$ROOT/data/system/environ/classpath"
 echo "classpath variables: $(printf '%s ' "${CPENV[@]%%=*}")"
 
-say "S2b what path an open file shows inside the root (zygote's fd allowlist compares these), chroot form"
-timeout 20 chroot "$ROOT" /system/bin/toybox env -i "${BASEENV[@]}" /system/bin/sh -c 'exec 3</apex/com.android.art/javalib/core-oj.jar; /system/bin/toybox readlink /proc/self/fd/3; head -n 4 /proc/self/mountinfo | cut -c1-200' 2>&1
+say "S2b what path the kernel reports for open files after pivot_root (zygote's fd allowlist compares these)"
+timeout 30 "$PY" "$ZYG" --probe-paths "$ROOT" 2>&1 | cut -c1-220
 
 say "S3 zygote: app_process64 -Xzygote --zygote, up to ${WAIT}s, no system_server, no binder"
 ls -l "$ROOT/system/etc/preloaded-classes" "$ROOT/system/bin/app_process64" 2>&1 | cut -c1-160
@@ -127,6 +127,21 @@ def enter_root(root):
         os.chdir("/")
 
 
+def probe_paths(root):
+    """After entering the root, open a few files and print the path the kernel reports for each descriptor."""
+    enter_root(root)
+    for path in ("/dev/urandom", "/dev/null", "/dev/zero", "/dev/tty", "/apex/com.android.art/javalib/core-oj.jar",
+                 "/system/etc/fonts.xml", "/proc/self/fd", "/"):
+        try:
+            fd = os.open(path, os.O_RDONLY | (os.O_DIRECTORY if path in ("/", "/proc/self/fd") else 0))
+            print(f"{path} -> {os.readlink(f'/proc/self/fd/{fd}')!r}", flush=True)
+        except OSError as error:
+            print(f"{path} -> error {error}", flush=True)
+    for line in open("/proc/self/mountinfo"):
+        if any(word in line for word in ("urandom", " /dev ", "/dev/null", "/dev/zero")):
+            print("mountinfo:", line.strip()[:200], flush=True)
+
+
 def launch_zygote(root, env_items):
     enter_root(root)
     sockets = Path("/dev/socket")
@@ -157,6 +172,9 @@ def launch_zygote(root, env_items):
 
 
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--probe-paths":
+        probe_paths(sys.argv[2])
+        return
     if len(sys.argv) >= 3 and sys.argv[1] == "--launch-zygote":
         launch_zygote(sys.argv[2], sys.argv[3:])
     if os.geteuid() == 0:
