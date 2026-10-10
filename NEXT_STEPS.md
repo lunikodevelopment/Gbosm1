@@ -17,8 +17,8 @@ Next action: the Binder/ART track has nothing for you right now (the ART scan,
 apex inspection and apex payload listing are done, results below; stage 9a
 waits on a go-ahead). The separate graphics track has its own pending step,
 "Graphics stage 3b" further down.
-Bring-up track (separate thread): run the root-tree host check ("Next action:
-bring-up stage B1a", below) and paste its output.
+Bring-up track (separate thread): extract the root tree ("Next action:
+bring-up stage B1b", below) and paste its output.
 Retain all earlier results; no completed probe needs rerunning.
 
 ## Plan: run the image's real servicemanager (changed from "stop" at the user's request)
@@ -530,23 +530,47 @@ What this changes in the plan:
   `/vendor` and the apex payloads exist as real directories. That serves ART
   (stage 9a), the property service stand-in, `logd` and any later `init` try.
 
-## Next action: bring-up stage B1a, root-tree host check (read-only)
+## Results: bring-up stage B1a, root-tree host check (read-only; reported by the user)
 
-**This step does not modify storage.** It only reads the validated image
-metadata and prints host facts. Nothing is created, mounted or executed from the
-image.
+- Image partitions: `system_a` 1.01 GiB, `system_ext_a` 0.17 GiB, `product_a`
+  1.83 GiB, `vendor_a` 0.36 GiB (3.37 GiB total; no `odm_a`, `odm` lives under
+  `vendor_a`). Free space: 201.2 GiB.
+- Multi-id mapping is available: `/etc/subuid` and `/etc/subgid` both have
+  `gbos_user:524288:65536`; `newuidmap`/`newgidmap` have `cap_setuid`/`cap_setgid`
+  file capabilities; util-linux 2.41.5 `unshare` supports `--map-auto`. So a
+  namespace can have root plus ids 1..65535 (Android's system, logd, graphics
+  users). Whether it actually works is tested at the start of the next step.
+- `fsck.erofs` 1.9.4 has `--extract` and `--offset`; `erofsfuse` is installed. The
+  running kernel does not list `erofs` in `/proc/filesystems`, so a kernel mount
+  is out and extraction is the route.
 
-Why: before extracting about five partitions into a tree, it shows their
-sizes, your free space, whether your user may map more than one user id into a
-private namespace (needed for services that run as non-root users), and which
-erofs tools can extract a whole tree.
+## Next action: bring-up stage B1b, extract the root tree
+
+**THIS STEP MODIFIES STORAGE (ordinary development write).** Scope: one new
+`work/asahi/android-root-*` directory in your checkout, expected 4 to 10 GiB
+(it refuses to start with under 30 GiB free). Filesystem: your home filesystem.
+The recovery image is only read. Nothing from the tree is executed or mounted.
+Possible loss: none to existing data. Files are owned by sub-ids (524288 and
+up), so your normal user cannot delete them directly; reversal is the command
+the script prints at the end (`unshare --user --map-auto --map-root-user rm -rf
+<dir>`). No sudo, no partitioning, no SELinux change.
+
+Why: ART, `logd`, the property service stand-in and any later `init` try need
+`/system`, `/vendor`, `/product` and `/system_ext` as real directories with
+Android owners. The script first checks that the namespace gets the 65536-id
+range and stops before writing anything if not. It extracts `system_a` as the
+root and `vendor_a`, `product_a`, `system_ext_a` under it (if the image has a
+symlink at one of those names, it is replaced by a directory in the new tree
+only), then prints top-level listing, sizes, owner counts and a few sample
+files.
 
 ```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/check-rootfs-host.py
+cd ~/Gbosm1 && git pull --ff-only && python3 asahi/extract-android-root.py
 ```
 
-Its first line reads `=== BRING-UP THREAD, STAGE B1a`. Paste the terminal output
-into the thread titled "Remaining steps to boot Android".
+Its first line reads `=== BRING-UP THREAD, STAGE B1b`. Wait for the prompt (a
+few minutes) and paste the output into the thread titled "Remaining steps to
+boot Android".
 
 ## Next action: ART / apex / zygote scan (read-only)
 
