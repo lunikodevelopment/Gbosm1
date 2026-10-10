@@ -30,6 +30,26 @@ Say **get logs** with the output pasted. It shows which service-manager method
 names the image's libbinder contains, to decide whether code 4 and the Service
 union reply are right. It does not by itself establish the transaction codes.
 
+## One command: read-only disassembly of the Service union decoder
+
+Result of the previous read-only check (`./lib64/libbinder.so` in
+`android-parcel-probe-rxdul6oa`): the image's libbinder contains both
+`checkService` and `checkService2` (and `getService`/`getService2`,
+`checkServiceAccess`, `unregisterForNotifications`). The symbol names confirm
+checkService2 exists; they do not give its transaction code. By upstream method
+order (recalled, not verified against this image) code 4 would be checkService2,
+which matches the observed request, so the likelier fault is the reply layout:
+the `Service` union tag/field order and whether the nested parcelable is sized.
+
+No storage is modified. On the M1:
+
+```bash
+cd ~/Gbosm1/work/asahi/android-parcel-probe-rxdul6oa/android-runtime/lib64 && nm -D --defined-only libbinder.so | grep -E 'Service.*readFromParcel|ServiceWithMetadata' ; objdump -d --no-show-raw-insn libbinder.so | awk '/^[0-9a-f]+ <_ZN7android2os7Service14readFromParcelEPKNS_6ParcelE>:/{p=1} p{print} /^$/{if(p)exit}' | head -120
+```
+
+Say **get logs** with the output. If `objdump` is missing, say so; do not
+install packages for this.
+
 ## One command: Android returned object and outgoing FD Parcel
 
 **THIS STEP MODIFIES STORAGE**
