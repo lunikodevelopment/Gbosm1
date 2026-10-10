@@ -11,29 +11,44 @@ ARM64/16 KiB.
 The dedicated Binder server domain ran with SELinux enforcing; its temporary
 module was removed and the new executable label restored after the latest run.
 Qualcomm graphics adaptation remains required.
-Next action: run the read-only servicemanager inspection below. Retain all
-earlier results; no completed probe needs rerunning.
+Next action: none is queued. The servicemanager inspection (below) shows that
+running the image's real `servicemanager` needs several fixtures; decide whether
+to pursue that or stop at the completed Parcel milestone. Retain all earlier
+results; no completed probe needs rerunning.
 
-## One command: inspect the image's servicemanager (read-only)
+## Completed inspection: the image's servicemanager (read-only)
 
-**THIS STEP MODIFIES STORAGE** (ordinary development write only)
+Reported by the user from `work/asahi/servicemanager-inspect-00epe3xu`: ARM64,
+16 KiB aligned, 137096 bytes. `DT_NEEDED`: libbase, libvintf, libcutils, liblog,
+libselinux, libperfetto_c, libbinder, libutils, libc++, libc, libm, libdl.
+Static strings only; they show what it references, not what it does when run.
 
-Scope: creates one new `work/asahi/servicemanager-inspect-*` directory holding a
-copy of `/system/bin/servicemanager` (size-limited to 64 MiB), a strings-hints
-file and `summary.json`. The image is only read with `dump.erofs`; nothing is
-mounted or executed. Reversal: delete the newly printed result directory.
+What the strings show it needs beyond the current private setup:
 
-Why: replacing the native stub context manager with the real `servicemanager`
-would cover the untested "real servicemanager" item and may give an Android
-process that can receive an FD. This step only shows its `DT_NEEDED` libraries
-and selected strings (properties, SELinux, VINTF and device-path hints) so we
-can tell what it needs before any run. The script is new and untested.
+- VINTF: `VintfObject::GetInstance` and messages such as "Could not find ... in
+  the VINTF manifest", so it expects the image's VINTF manifests at their
+  usual paths and may refuse or lazily start services otherwise.
+- SELinux: `selinux_status_open`, `selinux_check_access`,
+  `selinux_android_service_context_handle`, "SELinux denied for service" and
+  "SELinux: No match for". Its access checks use the host kernel's policy, and
+  Fedora's enforcing policy has no Android service labels, so registration and
+  lookup checks are likely to be denied unless handled. Not tested.
+- Property: it sets `servicemanager.ready` (existing private property fixture
+  only covers the read side; a set needs a property service) and can request
+  `ctl.interface_start` for lazy services.
+- Other: opens `/dev/binder`, links libperfetto_c, and references
+  `/system/bin/bootstrap/linker64`.
 
-```bash
-cd ~/Gbosm1 && git pull --ff-only && python3 asahi/inspect-servicemanager.py
-```
+What it does not show: any code path that reads the contents of a received FD.
+`BBinder::dump` is imported, which suggests the default dump handler receives
+an FD in a dump transaction but does nothing observable with it, so a run
+against it would not by itself prove Android reading FD data. The real
+`servicemanager` would still cover the "real servicemanager" gap, at the cost of
+fixtures for VINTF, SELinux behavior and the property service.
 
-Say **get logs** with the output.
+Options: stop at the completed Parcel milestone; or plan a multi-step
+real-servicemanager attempt with those fixtures, each step needing evidence
+first.
 
 ## Completed scan: Binder-linked executables in the image
 
