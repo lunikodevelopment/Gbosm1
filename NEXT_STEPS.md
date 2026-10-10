@@ -1523,6 +1523,14 @@ Send the printed `report.txt`. `HONEYKRISP_BIONIC=PASS` would show the
 Android-built driver submitting GPU work on the 16 KiB kernel. A stop names the
 step (build, a missing system_a library, dlopen, device creation or readback).
 
+First run (reported by the user, `work/asahi/honeykrisp-bionic-4mpimr0k`): the
+probe built with 16 KiB alignment and the dependency closure resolved through
+`libbinder_ndk.so`, then stopped with `not little-endian ELF64 (possibly a
+symlink)`: a `system_a:/system/lib64` entry is a symlink into
+`/apex/com.android.runtime/lib64/bionic/`. The runner now follows such
+symlinks into the image's runtime APEX (logged as `SYMLINK ...`) and stops on
+any other symlink. Rerun the commands above after pulling.
+
 ### Result: Graphics stage 2c Android Honeykrisp build
 
 Reported by the user from `work/asahi/honeykrisp-android-b7O7HstT` (built and

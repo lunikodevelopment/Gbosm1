@@ -106,6 +106,31 @@ def main():
         if built.returncode:
             raise ValueError('probe build failed')
 
+        def runtime_apex(member):
+            """Read one file from the image's com.android.runtime APEX payload (EROFS or ext4)."""
+            graphics = module('graphics', 'audit-graphics.py')
+            with tempfile.TemporaryDirectory(prefix='apex-scratch-', dir=out) as scratch:
+                package, payload = Path(scratch) / 'runtime.apex', Path(scratch) / 'payload.img'
+                r = subprocess.run(['dump.erofs', f'--offset={offset}', '--path=/system/apex/com.android.runtime.apex',
+                                    '--cat', str(image)], capture_output=True, timeout=120)
+                if r.returncode or len(r.stdout) > (512 << 20):
+                    raise ValueError('could not read the runtime APEX')
+                package.write_bytes(r.stdout)
+                graphics.extract_payload(package, payload)
+                with payload.open('rb') as f:
+                    f.seek(1024)
+                    sb = f.read(1024)
+                if sb[:4] == bytes.fromhex('e2e1f5e0'):
+                    command = ['dump.erofs', f'--path={member}', '--cat', str(payload)]
+                elif sb[56:58] == bytes.fromhex('53ef') and shutil.which('debugfs'):
+                    command = ['debugfs', '-R', 'cat ' + member, str(payload)]
+                else:
+                    raise ValueError('runtime APEX payload requires EROFS or ext4 with debugfs')
+                r = subprocess.run(command, capture_output=True, timeout=120)
+                if r.returncode or not r.stdout.startswith(b'\x7fELF') or len(r.stdout) > LIMIT:
+                    raise ValueError(f'could not read runtime APEX:{member}')
+                return r.stdout
+
         present = {p.name for p in libs.iterdir()} | {'ld-android.so'}
         pending = set()
         for path in (probe, libs / 'vulkan.asahi.so', libs / 'libdrm.so'):
@@ -122,10 +147,18 @@ def main():
                                 str(image)], capture_output=True, timeout=120)
             if r.returncode or not r.stdout or len(r.stdout) > LIMIT:
                 raise ValueError(f'could not read system_a:/system/lib64/{name}')
-            (libs / name).write_bytes(r.stdout)
-            info = helper.elf_info(r.stdout)
-            log(f'ELF system_a:/system/lib64/{name}: aligned_16k={info["aligned_16k"]} DT_NEEDED='
-                + ', '.join(info['needed']))
+            data, origin = r.stdout, f'system_a:/system/lib64/{name}'
+            if not data.startswith(b'\x7fELF'):
+                # dump.erofs --cat of a symlink prints its target; Bionic libraries point into the runtime APEX.
+                target = data.decode(errors='replace').strip()
+                log(f'SYMLINK {origin} -> {target}')
+                if not re.fullmatch(r'/apex/com\.android\.runtime/lib64/bionic/[A-Za-z0-9_.+-]+', target):
+                    raise ValueError(f'{origin} is a symlink outside the runtime APEX Bionic directory: {target}')
+                data, origin = runtime_apex(target.split('/apex/com.android.runtime', 1)[1]), \
+                    'runtime APEX:' + target.split('/apex/com.android.runtime', 1)[1]
+            (libs / name).write_bytes(data)
+            info = helper.elf_info(data)
+            log(f'ELF {origin}: aligned_16k={info["aligned_16k"]} DT_NEEDED=' + ', '.join(info['needed']))
             result['libraries'].append({'name': name, 'needed': info['needed'], 'aligned_16k': info['aligned_16k']})
             present.add(name)
             pending.update(info['needed'])
