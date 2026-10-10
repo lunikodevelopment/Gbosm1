@@ -13,6 +13,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #define MAP_BYTES (1024 * 1024)
@@ -88,8 +89,35 @@ static void free_buffer(int fd, binder_uintptr_t address) {
     memcpy(stream, &cmd, sizeof(cmd)); memcpy(stream + sizeof(cmd), &address, sizeof(address));
     exchange(fd, stream, sizeof(stream), NULL, 0);
 }
+static void server(const char *path, int ready_fd) {
+    alarm(15);
+    struct connection c = connect_device(path);
+    int fd = c.fd;
+    int unused = 0;
+    if (ioctl(fd, BINDER_SET_CONTEXT_MGR, &unused)) fail("BINDER_SET_CONTEXT_MGR");
+    uint32_t enter = BC_ENTER_LOOPER;
+    exchange(fd, &enter, sizeof(enter), NULL, 0);
+    require(write(ready_fd, "R", 1) == 1, "server readiness failed"); close(ready_fd);
+    struct binder_transaction_data request = receive(c, BR_TRANSACTION);
+    require(request.code == 0x1616, "unexpected transaction code");
+    struct binder_transaction_data reply = {0};
+    reply.data_size = sizeof(payload); reply.data.ptr.buffer = (uintptr_t)payload;
+    transaction_command(fd, BC_REPLY, &reply);
+    free_buffer(fd, request.data.ptr.buffer);
+    munmap(c.map, MAP_BYTES); close(fd);
+    puts("Dedicated-domain server verified request and submitted reply.");
+}
 int main(int argc, char **argv) {
-    require(argc == 2 && sysconf(_SC_PAGESIZE) == 16384, "requires private mount directory and 16 KiB pages");
+    if (argc == 4 && strcmp(argv[1], "--server") == 0) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+        char *end;
+        long ready = strtol(argv[3], &end, 10);
+        require(*end == 0 && ready >= 0 && ready <= 1024, "invalid readiness descriptor");
+        server(argv[2], (int)ready);
+        return 0;
+    }
+    int describe = argc == 3 && strcmp(argv[2], "--describe") == 0;
+    require((argc == 2 || describe) && sysconf(_SC_PAGESIZE) == 16384, "requires private mount directory and 16 KiB pages");
     setvbuf(stdout, NULL, _IONBF, 0);
     alarm(20);
     if (mount("binder", argv[1], "binder", 0, NULL)) fail("mount private binderfs in user namespace");
@@ -103,24 +131,28 @@ int main(int argc, char **argv) {
     if (ioctl(control, BINDER_CTL_ADD, &device)) fail("BINDER_CTL_ADD");
     close(control);
     printf("Private binder device major=%u minor=%u\n", device.major, device.minor);
+    char context[512];
+    ssize_t size = getxattr(device_path, "security.selinux", context, sizeof(context) - 1);
+    if (size < 0) fail("read Binder device SELinux context");
+    context[size] = 0;
+    printf("BINDER_DEVICE_CONTEXT=%s\n", context);
+    if (describe) {
+        size = getxattr(argv[1], "security.selinux", context, sizeof(context) - 1);
+        if (size < 0) fail("read binderfs root SELinux context");
+        context[size] = 0;
+        printf("BINDER_ROOT_CONTEXT=%s\n", context);
+        if (umount(argv[1])) fail("unmount description binderfs");
+        return 0;
+    }
     int ready[2]; if (pipe(ready)) fail("pipe");
     pid_t child = fork(); if (child < 0) fail("fork");
     if (child == 0) {
-        alarm(15); close(ready[0]);
-        struct connection server = connect_device(device_path);
-        int unused = 0;
-        if (ioctl(server.fd, BINDER_SET_CONTEXT_MGR, &unused)) fail("BINDER_SET_CONTEXT_MGR");
-        uint32_t enter = BC_ENTER_LOOPER;
-        exchange(server.fd, &enter, sizeof(enter), NULL, 0);
-        require(write(ready[1], "R", 1) == 1, "server readiness failed"); close(ready[1]);
-        struct binder_transaction_data request = receive(server, BR_TRANSACTION);
-        require(request.code == 0x1616, "unexpected transaction code");
-        struct binder_transaction_data reply = {0};
-        reply.data_size = sizeof(payload); reply.data.ptr.buffer = (uintptr_t)payload;
-        transaction_command(server.fd, BC_REPLY, &reply);
-        free_buffer(server.fd, request.data.ptr.buffer);
-        munmap(server.map, MAP_BYTES); close(server.fd);
-        _exit(0);
+        close(ready[0]);
+        char ready_text[32];
+        snprintf(ready_text, sizeof(ready_text), "%d", ready[1]);
+        execl("/usr/bin/runcon", "runcon", "-t", "gbos_binder_probe_t",
+              argv[0], "--server", device_path, ready_text, (char *)NULL);
+        fail("runcon dedicated Binder server");
     }
     close(ready[1]); char token;
     require(read(ready[0], &token, 1) == 1 && token == 'R', "server stopped before readiness");
